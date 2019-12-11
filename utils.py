@@ -62,21 +62,21 @@ def set_logger(log_path):
         logger.addHandler(stream_handler)
 
 
-def save_checkpoint(state, is_best, checkpoint):
-    """Saves model and training parameters at checkpoint + 'last.pth.tar'. If is_best==True, also saves
-    checkpoint + 'best.pth.tar'
+def save_checkpoint(state, is_best, checkpoint_dir):
+    """Saves model and training parameters at checkpoint + 'last.ckpt'. If is_best==True, also saves
+    checkpoint + 'best.ckpt'
     Args:
         state: (dict) contains model's state_dict, may contain other keys such as epoch, optimizer state_dict
         is_best: (bool) True if it is the best model seen till now
         checkpoint: (string) folder where parameters are to be saved
     """
-    filepath = os.path.join(checkpoint, 'last.pth.tar')
+    filepath = os.path.join(checkpoint, 'last.ckpt')
     if not os.path.exists(checkpoint):
         print("Checkpoint Directory does not exist! Making directory {}".format(checkpoint))
         os.mkdir(checkpoint)
     torch.save(state, filepath)
     if is_best:
-        shutil.copyfile(filepath, os.path.join(checkpoint, 'best.pth.tar'))
+        shutil.copyfile(filepath, os.path.join(checkpoint, 'best.ckpt'))
 
 
 def load_checkpoint(checkpoint, model, optimizer=None):

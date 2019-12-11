@@ -15,7 +15,7 @@ from evaluate import evaluate
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--dataset', default='conll',
+parser.add_argument('--dataset', default='wn18',
                     help="Directory containing the dataset")
 parser.add_argument('--seed', default=2019,
                     help="random seed for initialization")
@@ -41,8 +41,7 @@ def train_and_evaluate(model, train_data, val_data, optimizer, params, model_dir
     """Train the model and evaluate every epoch"""
     # reload weights from restore_dir if specified
     if restore_dir is not None:
-        model = utils.load_checkpoint(
-            os.path.join(restore_dir, 'last.pth.tar'))
+        utils.load_checkpoint(os.path.join(restore_dir, 'last.ckpt'), model)
 
     # main evaluation criteria
     best_measure = 0
@@ -67,7 +66,8 @@ def train_and_evaluate(model, train_data, val_data, optimizer, params, model_dir
             if improve_measure > 0:
                 logging.info('- Found new best measure')
                 best_measure = val_measure
-                utils.save_checkpoint(model['state_dict'], is_best=False, checkpoint=model_dir)
+                state = {'state_dict': model.state_dict(), 'optim_dict': optimizer.state_dict()}
+                utils.save_checkpoint(state, is_best=False, checkpoint_dir=model_dir)
                 if improve_measure < params.patience:
                     patience_counter += 1
                 else:
@@ -81,7 +81,8 @@ def train_and_evaluate(model, train_data, val_data, optimizer, params, model_dir
                 break
         else:
             # if no valid dataset exists, run all epochs
-            utils.save_checkpoint(model['state_dict'], is_best=False, checkpoint=model_dir)
+            state = {'state_dict': model.state_dict(), 'optim_dict': optimizer.state_dict()}
+            utils.save_checkpoint(state, is_best=False, checkpoint_dir=model_dir)
 
 
 if __name__ == '__main__':
@@ -114,13 +115,14 @@ if __name__ == '__main__':
     # create dataset and normalize
     logging.info('Loading the dataset...')
 
-    dataset = pickle.load(open(os.path.join('data', args.dataset), 'rb'))
+    dataset = pickle.load(open(os.path.join('data', args.dataset, 'train'), 'rb'))
     val, pos = dataset.x.max(dim=0)
     dataset.x /= val.abs()
+    num_features = dataset.num_features
     train_data = dataset.to(params.device)
 
     # prepare model
-    model = LGCN_Net3(dataset.to(params.device))
+    model = LGCN_Net3(num_features)
     model.to(params.device)
 
     if params.n_gpu > 1 and args.multi_gpu:

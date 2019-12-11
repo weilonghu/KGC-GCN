@@ -13,7 +13,7 @@ from models import LGCN_Net3
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--dataset', default='conll',
+parser.add_argument('--dataset', default='wn18',
                     help="Directory containing the dataset")
 parser.add_argument('--seed', default=2019,
                     help="random seed for initialization")
@@ -72,13 +72,15 @@ if __name__ == '__main__':
     # create dataset and normalize
     logging.info('Loading the dataset...')
 
-    dataset = pickle.load(open(os.path.join('data', args.dataset), 'rb'))
+    dataset = pickle.load(open(os.path.join('data', args.dataset, 'train'), 'rb'))
     val, pos = dataset.x.max(dim=0)
     dataset.x /= val.abs()
+    num_features = dataset.num_features
     test_data = dataset.to(params.device)
 
     # prepare model
-    model = LGCN_Net3(dataset.to(params.device))
+    model = LGCN_Net3(num_features)
+    utils.load_checkpoint(os.path.join(model_dir, 'last.ckpt'), model)
     model.to(params.device)
 
     if params.n_gpu > 1 and args.multi_gpu:

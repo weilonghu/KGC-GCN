@@ -1,6 +1,6 @@
 import torch
 import torch.nn.functional as F
-from lgcn import LGCN
+from layers import LGCN
 
 
 # create the learning mechanism that is to operate on the edge populations / multi-edges

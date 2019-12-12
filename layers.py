@@ -7,7 +7,7 @@ from torch_geometric.utils import add_self_loops, scatter_
 
 class LGCN(MessagePassing):
     def __init__(self, in_channels, out_channels, edge_nn, L=4, make_bidirectional=False, neighbor_nl=False, DVE=False):
-        super().__init__(aggr='add') # add, because we do our own normalization
+        super().__init__(aggr='add')  # add, because we do our own normalization
 
         self.L = L
         self.DVE = DVE

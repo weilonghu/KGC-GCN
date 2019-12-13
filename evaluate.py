@@ -4,12 +4,12 @@ import argparse
 import random
 import logging
 import os
-import pickle
 
 import torch
 
 import utils
-from models import LGCN_Net3
+from model import MGCN_Net
+from data_loader import DataLoader
 
 
 parser = argparse.ArgumentParser()
@@ -23,18 +23,24 @@ parser.add_argument('--multi_gpu', default=False, action='store_true',
                     help="Whether to use multiple GPUs if available")
 
 
-def evaluate(model, data, params, mark='Eval', verbose=False):
+def evaluate(model, data_iterator, params, mark='Eval', verbose=False):
     """Evaluate the model on dataset 'data'"""
     # set the model to evaluation mode
     model.eval()
 
-    with torch.no_grad():
-        test_acc = model(data).max(dim=1)[1][data.test_mask].eq(
-            data.y[data.test_mask]).sum().item() / data.test_mask.sum().item()
+    # a running average object for loss
+    loss_avg = utils.RunningAverage()
+
+    for batch in data_iterator:
+        with torch.no_grad():
+            loss, acc = model(batch)
+        if params.n_gpu > 1 and params.multi_gpu:
+            loss = loss.mean()
+        loss_avg.update(loss.item())
 
     # logging and report
     metrics = {}
-    metrics['acc'] = test_acc
+    metrics['acc'] = acc
     metrics_str = "; ".join("{}: {:05.2f}".format(k, v)
                             for k, v in metrics.items())
     logging.info("- {} metrics: ".format(mark) + metrics_str)
@@ -72,14 +78,12 @@ if __name__ == '__main__':
     # create dataset and normalize
     logging.info('Loading the dataset...')
 
-    dataset = pickle.load(open(os.path.join('data', args.dataset, 'train'), 'rb'))
-    val, pos = dataset.x.max(dim=0)
-    dataset.x /= val.abs()
-    num_features = dataset.num_features
-    test_data = dataset.to(params.device)
+    dataloader = DataLoader(args.dataset, params)
+    test_data = dataloader.load_data(data_type='test')
+    test_data_iterator = dataloader.data_iterator(test_data, params.batch_size)
 
     # prepare model
-    model = LGCN_Net3(num_features)
+    model = MGCN_Net(params)
     utils.load_checkpoint(os.path.join(model_dir, 'last.ckpt'), model)
     model.to(params.device)
 
@@ -92,4 +96,4 @@ if __name__ == '__main__':
 
     # train and evaluate the model
     logging.info('Starting training for {} epoch(s)'.format(params.epoch_num))
-    evaluate(model, test_data, params, mark='Test', verbose=True)
+    evaluate(model, test_data_iterator, params, mark='Test', verbose=True)

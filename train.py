@@ -4,14 +4,14 @@ import argparse
 import logging
 import os
 import random
-import pickle
 
 import torch
-import torch.nn.functional as F
+import torch.nn as nn
 
 import utils
-from models import LGCN_Net3
+from model import MGCN_Net
 from evaluate import evaluate
+from data_loader import DataLoader
 
 
 parser = argparse.ArgumentParser()
@@ -25,16 +25,32 @@ parser.add_argument('--multi_gpu', default=False, action='store_true',
                     help="Whether to use multiple GPUs if available")
 
 
-def train(model, data, train_class_weights, optimizer, params):
+def train(model, data_iterator, optimizer, params):
     """Train the model for one epoch"""
     # set the model to training mode
     model.train()
 
+    # a running average object for loss
+    loss_avg = utils.RunningAverage()
+
     optimizer.zero_grad()
-    loss = F.nll_loss(model(data)[data.train_mask],
-                      data.y[data.train_mask], weight=train_class_weights)
-    loss.backward()
-    optimizer.step()
+
+    for batch in data_iterator:
+        # compute model output and loss
+        loss = model(batch)
+
+        if params.n_gpu > 1 and params.multi_gpu:
+            loss = loss.mean()  # mean() to average on multi-gpu
+        loss.backward()
+
+        # gradient clipping
+        nn.utils.clip_grad_norm_(
+            parameters=model.parameters(), max_norm=params.clip_grad)
+        optimizer.step()
+        model.zero_grad()
+
+        # update the average loss
+        loss_avg.update(loss.item())
 
 
 def train_and_evaluate(model, train_data, val_data, optimizer, params, model_dir, restore_dir):
@@ -48,41 +64,37 @@ def train_and_evaluate(model, train_data, val_data, optimizer, params, model_dir
     # early stopping
     patience_counter = 0
 
-    train_class_ratio = dataset.y[dataset.train_mask].sum().item() / dataset.y[dataset.train_mask].shape[0]
-    train_class_weights = torch.Tensor([train_class_ratio, 1 - train_class_ratio]).to(params.device)
-
     for epoch in range(1, params.epoch_num + 1):
         # run one epoch
         logging.info('Epoch {}/{}'.format(epoch, params.epoch_num))
 
+        # data iterator for training
+        train_data_iterator = DataLoader.data_iterator(train_data, params.batch_size, shuffle=True)
+
         # train for one epoch on training set
-        train(model, train_data, train_class_weights, optimizer, params)
+        train(model, train_data_iterator, optimizer, params)
 
-        # try evaluate this epoch if val_data exists
-        if val_data is not None:
-            val_metrics = evaluate(model, val_data, params, mark='Val')
-            val_measure = val_metrics['measure']
-            improve_measure = val_measure - best_measure
-            if improve_measure > 0:
-                logging.info('- Found new best measure')
-                best_measure = val_measure
-                state = {'state_dict': model.state_dict(), 'optim_dict': optimizer.state_dict()}
-                utils.save_checkpoint(state, is_best=False, checkpoint_dir=model_dir)
-                if improve_measure < params.patience:
-                    patience_counter += 1
-                else:
-                    patience_counter = 0
-            else:
-                patience_counter += 1
-
-            # early stopping and logging best measure
-            if (patience_counter >= params.patience_num and epoch > params.min_epoch_num) or epoch == params.epoch_num:
-                logging.info("Best val measure: {:05.2f}".format(best_measure))
-                break
-        else:
-            # if no valid dataset exists, run all epochs
+        # data iterator for evaluation
+        val_data_iterator = DataLoader.data_iterator(val_data, params.batch_size, shuffle=False)
+        val_metrics = evaluate(model, val_data_iterator, params, mark='Val')
+        val_measure = val_metrics['measure']
+        improve_measure = val_measure - best_measure
+        if improve_measure > 0:
+            logging.info('- Found new best measure')
+            best_measure = val_measure
             state = {'state_dict': model.state_dict(), 'optim_dict': optimizer.state_dict()}
             utils.save_checkpoint(state, is_best=False, checkpoint_dir=model_dir)
+            if improve_measure < params.patience:
+                patience_counter += 1
+            else:
+                patience_counter = 0
+        else:
+            patience_counter += 1
+
+        # early stopping and logging best measure
+        if (patience_counter >= params.patience_num and epoch > params.min_epoch_num) or epoch == params.epoch_num:
+            logging.info("Best val measure: {:05.2f}".format(best_measure))
+            break
 
 
 if __name__ == '__main__':
@@ -115,14 +127,12 @@ if __name__ == '__main__':
     # create dataset and normalize
     logging.info('Loading the dataset...')
 
-    dataset = pickle.load(open(os.path.join('data', args.dataset, 'train'), 'rb'))
-    val, pos = dataset.x.max(dim=0)
-    dataset.x /= val.abs()
-    num_features = dataset.num_features
-    train_data = dataset.to(params.device)
+    dataloader = DataLoader(args.dataset, params)
+    train_data = dataloader.load_data(data_type='train')
+    valid_data = dataloader.load_data(data_type='valid')
 
     # prepare model
-    model = LGCN_Net3(num_features)
+    model = MGCN_Net(params)
     model.to(params.device)
 
     if params.n_gpu > 1 and args.multi_gpu:
@@ -134,5 +144,5 @@ if __name__ == '__main__':
 
     # train and evaluate the model
     logging.info('Starting training for {} epoch(s)'.format(params.epoch_num))
-    train_and_evaluate(model, train_data, None, optimizer,
+    train_and_evaluate(model, train_data, valid_data, optimizer,
                        params, model_dir, args.restore_dir)

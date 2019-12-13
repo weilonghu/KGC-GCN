@@ -3,6 +3,7 @@ import logging
 import os
 import shutil
 import torch
+import math
 
 
 class Params():
@@ -34,6 +35,35 @@ class Params():
     def dict(self):
         """Gives dict-like access to Params instance by `params.dict['learning_rate']"""
         return self.__dict__
+
+
+class RunningAverage():
+    """A simple class that maintains the running average of a quantity
+    Example:
+    ```
+    loss_avg = RunningAverage()
+    loss_avg.update(2)
+    loss_avg.update(4)
+    loss_avg() = 3
+    ```
+    """
+
+    def __init__(self):
+        self.steps = 0
+        self.total = 0
+
+    def update(self, val):
+        self.total += val
+        self.steps += 1
+
+    def __call__(self):
+        return self.total / float(self.steps)
+
+
+def uniform(size, tensor):
+    bound = 1.0 / math.sqrt(size)
+    if tensor is not None:
+        tensor.data.uniform_(-bound, bound)
 
 
 def set_logger(log_path):
@@ -70,13 +100,13 @@ def save_checkpoint(state, is_best, checkpoint_dir):
         is_best: (bool) True if it is the best model seen till now
         checkpoint: (string) folder where parameters are to be saved
     """
-    filepath = os.path.join(checkpoint, 'last.ckpt')
-    if not os.path.exists(checkpoint):
-        print("Checkpoint Directory does not exist! Making directory {}".format(checkpoint))
-        os.mkdir(checkpoint)
+    filepath = os.path.join(checkpoint_dir, 'last.ckpt')
+    if not os.path.exists(checkpoint_dir):
+        print("Checkpoint Directory does not exist! Making directory {}".format(checkpoint_dir))
+        os.mkdir(checkpoint_dir)
     torch.save(state, filepath)
     if is_best:
-        shutil.copyfile(filepath, os.path.join(checkpoint, 'best.ckpt'))
+        shutil.copyfile(filepath, os.path.join(checkpoint_dir, 'best.ckpt'))
 
 
 def load_checkpoint(checkpoint, model, optimizer=None):

@@ -7,11 +7,12 @@ import random
 
 import torch
 import torch.nn as nn
+from tqdm import trange
 
 import utils
-from model import MGCN_Net
+from model import MGCN
 from evaluate import evaluate
-from data_loader import DataLoader
+from data_set import DataSet
 
 
 parser = argparse.ArgumentParser()
@@ -25,35 +26,34 @@ parser.add_argument('--multi_gpu', default=False, action='store_true',
                     help="Whether to use multiple GPUs if available")
 
 
-def train(model, data_iterator, optimizer, params):
+def train(model, dataset, optimizer, params):
     """Train the model for one epoch"""
     # set the model to training mode
     model.train()
 
-    # a running average object for loss
-    loss_avg = utils.RunningAverage()
-
     optimizer.zero_grad()
 
-    for batch in data_iterator:
-        # compute model output and loss
-        loss = model(batch)
+    # compute model output and loss
+    train_data = dataset.build_train_graph()
+    train_data.to(params.device)
+    entity_embedding = model(
+        train_data.entity, train_data.edge_index,
+        train_data.edge_type, train_data.edge_norm)
+    loss = model.score_loss(entity_embedding, train_data.samples, train_data.labels) + \
+        params.regularization * model.reg_loss(entity_embedding)
 
-        if params.n_gpu > 1 and params.multi_gpu:
-            loss = loss.mean()  # mean() to average on multi-gpu
-        loss.backward()
+    if params.n_gpu > 1 and params.multi_gpu:
+        loss = loss.mean()  # mean() to average on multi-gpu
+    loss.backward()
 
-        # gradient clipping
-        nn.utils.clip_grad_norm_(
-            parameters=model.parameters(), max_norm=params.clip_grad)
-        optimizer.step()
-        model.zero_grad()
-
-        # update the average loss
-        loss_avg.update(loss.item())
+    # gradient clipping
+    nn.utils.clip_grad_norm_(
+        parameters=model.parameters(), max_norm=params.clip_grad)
+    optimizer.step()
+    model.zero_grad()
 
 
-def train_and_evaluate(model, train_data, val_data, optimizer, params, model_dir, restore_dir):
+def train_and_evaluate(model, dataset, optimizer, params, model_dir, restore_dir):
     """Train the model and evaluate every epoch"""
     # reload weights from restore_dir if specified
     if restore_dir is not None:
@@ -64,26 +64,30 @@ def train_and_evaluate(model, train_data, val_data, optimizer, params, model_dir
     # early stopping
     patience_counter = 0
 
-    for epoch in range(1, params.epoch_num + 1):
-        # run one epoch
-        logging.info('Epoch {}/{}'.format(epoch, params.epoch_num))
+    # evaluation triplet and graph
+    eval_triplets = dataset.valid_triplets
+    all_triplets = dataset.total_triplets()
+    eval_graph = dataset.build_eval_graph()
 
-        # data iterator for training
-        train_data_iterator = DataLoader.data_iterator(train_data, params.batch_size, shuffle=True)
+    # use tqdm for progress bar
+    epochs = trange(params.epoch_num)
+    for epoch in epochs:
+        # run one epoch
+        logging.info('Epoch {}/{}'.format(epoch + 1, params.epoch_num))
 
         # train for one epoch on training set
-        train(model, train_data_iterator, optimizer, params)
+        train(model, dataset, optimizer, params)
 
-        # data iterator for evaluation
-        val_data_iterator = DataLoader.data_iterator(val_data, params.batch_size, shuffle=False)
-        val_metrics = evaluate(model, val_data_iterator, params, mark='Val')
+        val_metrics = evaluate(model, eval_triplets, all_triplets, eval_graph, params, mark='Val')
         val_measure = val_metrics['measure']
         improve_measure = val_measure - best_measure
         if improve_measure > 0:
             logging.info('- Found new best measure')
             best_measure = val_measure
-            state = {'state_dict': model.state_dict(), 'optim_dict': optimizer.state_dict()}
-            utils.save_checkpoint(state, is_best=False, checkpoint_dir=model_dir)
+            state = {'state_dict': model.state_dict(
+            ), 'optim_dict': optimizer.state_dict()}
+            utils.save_checkpoint(state, is_best=False,
+                                  checkpoint_dir=model_dir)
             if improve_measure < params.patience:
                 patience_counter += 1
             else:
@@ -127,12 +131,11 @@ if __name__ == '__main__':
     # create dataset and normalize
     logging.info('Loading the dataset...')
 
-    dataloader = DataLoader(args.dataset, params)
-    train_data = dataloader.load_data(data_type='train')
-    valid_data = dataloader.load_data(data_type='valid')
+    dataset = DataSet(args.dataset, params)
 
     # prepare model
-    model = MGCN_Net(params)
+    model = MGCN(dataset.n_entity, dataset.num_relations,
+                 params.n_bases, params.dropout)
     model.to(params.device)
 
     if params.n_gpu > 1 and args.multi_gpu:
@@ -144,5 +147,5 @@ if __name__ == '__main__':
 
     # train and evaluate the model
     logging.info('Starting training for {} epoch(s)'.format(params.epoch_num))
-    train_and_evaluate(model, train_data, valid_data, optimizer,
+    train_and_evaluate(model, dataset, optimizer,
                        params, model_dir, args.restore_dir)

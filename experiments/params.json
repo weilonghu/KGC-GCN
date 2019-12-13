@@ -9,7 +9,6 @@
     "patience": 0.02,
     "patience_num": 5,
 
-    "pretrained_entities": "",
-    "pretrained_relations": "",
+    "regularization": 1e-2,
     "vector_size": 50
 }

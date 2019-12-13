@@ -2,19 +2,21 @@
 
 import os
 import logging
-import numpy as np
 
+import numpy as np
 import torch
+import torch.nn.functional as F
+from torch_scatter import scatter_add
 from torch_geometric.data import Data
-from torch_geometric.data import DataLoader as GDataLoader
 
 
 class DataSet:
     def __init__(self, dataset, params):
         self.dataset = dataset
-        self.pretrained_entities = params.pretrained_entities
-        self.pretrained_relations = params.pretrained_relations
         self.vector_size = params.vector_size
+        self.sample_size = params.sample_size
+        self.split_size = params.split_size
+        self.negative_rate = params.negative_rate
 
         # whether dataset exists
         assert os.path.exists(os.path.join(
@@ -25,47 +27,30 @@ class DataSet:
         self.entity2id = self.load_entries(self.dataset)
         self.relation2id = self.load_entries(self.dataset, load_entities=False)
 
-        # initialize representations of entities and relations
-        self.entity_repr = np.empty((len(self.entities2idx), self.vector_size))
-        self.relation_repr = np.empty(
-            (len(self.relations2idx), self.vector_size))
+        self.n_entity = len(self.entity2id)
+        self.n_relation = len(self.relation2id)
 
-        # if exists pretrained entities or relations, load them
-        if type(self.pretrained_entities) == str and len(self.pretrained_entities) > 0:
-            assert os.path.exists(
-                self.pretrained_entities), 'Pretrained entities not found'
-            self.entity_repr = self.init_entry_repr(
-                self.pretrained_entities, self.entities2idx)
+        # load traiplets
+        self.train_triplets, self.valid_triplets, self.test_triplets = self.load_data()
 
-        if type(self.pretrained_relations) == str and len(self.pretrained_relations) > 0:
-            assert os.path.exists(
-                self.pretrained_relations), 'Pretrained relations not found'
-            self.relation_repr = self.init_entry_repr(
-                self.pretrain_relations, self.relations2idx)
+    def total_triplets(self):
+        """Get all triplets for evaluation"""
+        return np.concatenate((
+            self.train_triplets, self.valid_triplets, self.test_triplets
+        ))
 
-    @classmethod
-    def data_iterator(self, dataset, batch_size, shuffle=False):
-        return GDataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
+    def _load_data(self):
+        """Load training set, valid set and test set from files
+        because of the 'filtering' setting in evaluation
+        """
+        # load triplets for training set, valid set and test set
+        train_triplets = self.load_triplets(self.dataset, 'train')
+        valid_triplets = self.load_triplets(self.dataset, 'valid')
+        test_triplets = self.load_triplets(self.dataset, 'test')
 
-    def load_data(self, data_type):
-        """Load training set, valid set or test set from files"""
-        # load triplets for training set, valid set or test set
-        triplets = self.load_triplets(self.dataset, data_type)
+        return train_triplets, valid_triplets, test_triplets
 
-        # compute graph edges
-        edge_index, edge_attr = self.graph_edges(
-            self.entities2idx, self.relations2idx, triplets, self.relation_repr)
-
-        # create pytorch_geometric data
-        data = Data(
-            x=torch.from_numpy(self.entity_repr),
-            edge_index=torch.LongTensor(edge_index),
-            edge_attr=torch.from_numpy(edge_attr)
-        )
-
-        return data
-
-    def load_entries(self, dataset, load_entities=True):
+    def _load_entries(self, dataset, load_entities=True):
         """Load entities or relations from file, i.e. entities.dict or relations.dict
 
         Args:
@@ -75,7 +60,8 @@ class DataSet:
             entries2idx: (dict) map each entry to a number
         """
         entries = {}
-        with open(os.path.join('data', dataset, 'entities.dict' if load_entities else 'relations.dict'), 'r') as f:
+        entry_file = 'entities.dict' if load_entities else 'relations.dict'
+        with open(os.path.join('data', dataset, entry_file), 'r') as f:
             for line in f.readlines():
                 eid, entry = line.strip().split()
                 entries[entry] = eid
@@ -86,7 +72,7 @@ class DataSet:
 
         return entries
 
-    def load_triplets(self, dataset, data_type):
+    def _load_triplets(self, dataset, data_type):
         """Load triplets from train.txt, valid.txt or test.txt
 
         Args:
@@ -107,40 +93,112 @@ class DataSet:
         logging.info('Found {} triplets in {}.txt from dataset {}'.format(
             len(triplets), data_type, dataset))
 
-        return triplets
+        return np.array(triplets)
 
-    def init_entry_repr(self, filename, entries2idx):
-        """Initialize the representations of entries using pretrained model
+    def _sample_edge_uniform(self, n_triples, sample_size):
+        """Generate the edge indices to sample"""
+        return np.random.choice(np.arange(n_triples), sample_size, replace=False)
 
-        Args:
-            filename: (string) file containing pretrained representations
-            entries2idx: (dict) returned by 'load_entryies' function
-        Return:
-            entries_repr: (numpy array) representation of entites or relations
-        """
-        pass
-
-    def graph_edges(self, entities2idx, relations2idx, triplets, relation_repr):
-        """Construct the edge_index matrix and edge_attr matrix from triplets
+    def _negative_sampling(self, pos_samples, num_entity, negative_rate):
+        """Sample negative triplets for training
 
         Args:
-            entities2idx: (dict) map each entity to a number or index
-            relations2idx: (dict) map each relation to a number or index
-            triplets: (list) a list containing triplets
-            relation_repr: (2-d array) representations of relations
+            pos_sample: positive samples
+            num_entity: (int) the number of entities
+            negative_rate: (int) the proportion of negative samples
         Return:
-            edge_index: (2-d array) shape: [2, edge_num]
-            edge_attr: (2-d array) shape: [edge_num, vector_size]
+            samples: (array) samples including positive and negative samples
+            labels: (array) labels whose values in [0, 1]
         """
-        # construct two matrix
-        edge_index = np.zeros((2, len(triplets)))
-        edge_attr = np.zeros((len(triplets), relation_repr.shape[1]))
-        for idx, triplet in enumerate(triplets):
-            head, relation, tail = triplet
-            headidx, tailidx = entities2idx.get(head), entities2idx.get(tail)
-            # set edge_index to entity index
-            edge_index[0][idx], edge_index[1][idx] = headidx, tailidx
-            # set edge_attr to relation representation
-            edge_attr[idx][:] = relation_repr[relations2idx.get(relation)][:]
+        size = len(pos_samples)
+        # genrate labels
+        labels = np.zeros(size * (negative_rate + 1), dtype=np.float)
+        labels[: size] = 1  # labels of positive samples
 
-        return edge_index, edge_attr
+        # sample negative samples
+        neg_samples = np.tile(pos_samples, (negative_rate, 1))
+        values = np.random.choice(num_entity, size=size * negative_rate)
+        choices = np.random.uniform(size=size * negative_rate)
+        subj, obj = choices > 0.5, choices <= 0.5
+        neg_samples[subj, 0] = values[subj]
+        neg_samples[obj, 2] = values[obj]
+
+        return np.concatenate((pos_samples, neg_samples)), labels
+
+    def _edge_normalization(self, edge_type, edge_index, num_entiry, num_relation):
+        """Edge normalization trick
+        """
+        one_hot = F.one_hot(edge_type, num_classes=2 * num_relation).to(torch.float)
+        deg = scatter_add(one_hot, edge_index[0], dim=0, dim_size=num_entiry)
+        index = edge_type + torch.arange(len(edge_index[0])) * (2 * num_relation)
+        edge_norm = 1 / deg[edge_index[0]].view(-1)[index]
+
+        return edge_norm
+
+    def build_train_graph(self):
+        """Get training graph and signals
+        First perform edge neighborhood sampling on graph,
+        then perform negative sampling to generate negative samples
+        """
+        sample_size = self.sample_size
+        split_size = self.split_size
+        negative_rate = self.negative_rate
+
+        edges = self._sample_edge_uniform(len(self.train_triplets), sample_size)
+
+        # select sampled edges
+        edges = self.train_triplets[edges]
+        src, rel, dst = edges.transpose()
+        uniq_entity, edges = np.unique((src, dst), return_inverse=True)
+        src, dst = np.reshape(edges, (2, -1))
+        relabeled_edges = np.stack((src, rel, dst)).transpose()
+
+        # Negative sampling
+        samples, labels = self._negative_sampling(relabeled_edges, len(uniq_entity), negative_rate)
+
+        # further split graph, only half of the edges will be used as graph structure,
+        # while the rest half is used as unseen positive samples
+        split_size = int(sample_size * split_size)
+        graph_split_ids = np.random.choice(np.arange(sample_size), size=split_size, replace=False)
+
+        src = torch.LongTensor(src[graph_split_ids]).contiguous()
+        dst = torch.LongTensor(dst[graph_split_ids]).contiguous()
+        rel = torch.LongTensor(rel[graph_split_ids]).contiguous()
+
+        # create bi-directional graph
+        src, dst = torch.cat((src, dst)), torch.cat((dst, src))
+        rel = torch.cat((rel, rel + self.n_relation))
+
+        edge_index = torch.stack((src, dst))
+        edge_type = rel
+
+        data = Data(edge_index=edge_index)
+        data.entity = torch.from_numpy(uniq_entity)
+        data.edge_type = edge_type
+        data.edge_norm = self._edge_normalization(edge_type, edge_index, len(uniq_entity), self.n_relation)
+        data.samples = torch.from_numpy(samples)
+        data.labels = torch.from_numpy(labels)
+
+        return data
+
+    def build_eval_graph(self, triplets):
+        """Used to produce embeddings for evaluation"""
+        src, rel, dst = triplets.transpose()
+
+        src = torch.from_numpy(src)
+        rel = torch.from_numpy(rel)
+        dst = torch.from_numpy(dst)
+
+        # create bi-directional graph
+        src, dst = torch.cat((src, dst)), torch.cat((dst, src))
+        rel = torch.cat((rel, rel + self.n_relation))
+
+        edge_index = torch.stack((src, dst))
+        edge_type = rel
+
+        data = Data(edge_index=edge_index)
+        data.entity = torch.from_numpy(np.arange(self.n_entity))
+        data.edge_type = edge_type
+        data.edge_norm = self._edge_normalization(edge_type, edge_index, self.n_entity, self.n_relation)
+
+        return data

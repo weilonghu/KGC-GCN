@@ -15,9 +15,9 @@ class MGCN(torch.nn.Module):
 
         nn.init.xavier_uniform_(self.relation_embedding, gain=nn.init.calculate_gain('relu'))
 
-        self.conv1 = RGCNConv(
+        self.conv1 = MGCNConv(
             100, 100, num_relations * 2, num_bases=num_bases)
-        self.conv2 = RGCNConv(
+        self.conv2 = MGCNConv(
             100, 100, num_relations * 2, num_bases=num_bases)
 
         self.dropout_ratio = dropout
@@ -48,7 +48,7 @@ class MGCN(torch.nn.Module):
         return torch.mean(embedding.pow(2)) + torch.mean(self.relation_embedding.pow(2))
 
 
-class RGCNConv(MessagePassing):
+class MGCNConv(MessagePassing):
     r"""The relational graph convolutional operator from the `"Modeling
     Relational Data with Graph Convolutional Networks"
     <https://arxiv.org/abs/1703.06103>`_ paper
@@ -76,7 +76,7 @@ class RGCNConv(MessagePassing):
 
     def __init__(self, in_channels, out_channels, num_relations, num_bases,
                  root_weight=True, bias=True, **kwargs):
-        super(RGCNConv, self).__init__(aggr='mean', **kwargs)
+        super(MGCNConv, self).__init__(aggr='mean', **kwargs)
 
         self.in_channels = in_channels
         self.out_channels = out_channels

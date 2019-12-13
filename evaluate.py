@@ -8,8 +8,9 @@ import os
 import torch
 
 import utils
-from model import MGCN_Net
-from data_loader import DataLoader
+from model import MGCN
+from data_set import DataSet
+from metric import calc_mrr
 
 
 parser = argparse.ArgumentParser()
@@ -23,24 +24,20 @@ parser.add_argument('--multi_gpu', default=False, action='store_true',
                     help="Whether to use multiple GPUs if available")
 
 
-def evaluate(model, data_iterator, params, mark='Eval', verbose=False):
+def evaluate(model, eval_triplets, all_triplets, eval_graph, params, mark='Eval', verbose=False):
     """Evaluate the model on dataset 'data'"""
     # set the model to evaluation mode
     model.eval()
 
-    # a running average object for loss
-    loss_avg = utils.RunningAverage()
+    with torch.no_grad():
+        entity_embedding = model(eval_graph.entity, eval_graph.edge_index, eval_graph.edge_type, eval_graph.edge_norm)
 
-    for batch in data_iterator:
-        with torch.no_grad():
-            loss, acc = model(batch)
-        if params.n_gpu > 1 and params.multi_gpu:
-            loss = loss.mean()
-        loss_avg.update(loss.item())
+    mrr = calc_mrr(entity_embedding, model.relation_embedding, eval_triplets, all_triplets, hits=[1, 3, 10])
 
     # logging and report
     metrics = {}
-    metrics['acc'] = acc
+    metrics['mrr'] = mrr
+    metrics['measure'] = mrr
     metrics_str = "; ".join("{}: {:05.2f}".format(k, v)
                             for k, v in metrics.items())
     logging.info("- {} metrics: ".format(mark) + metrics_str)
@@ -78,12 +75,13 @@ if __name__ == '__main__':
     # create dataset and normalize
     logging.info('Loading the dataset...')
 
-    dataloader = DataLoader(args.dataset, params)
-    test_data = dataloader.load_data(data_type='test')
-    test_data_iterator = dataloader.data_iterator(test_data, params.batch_size)
+    dataset = DataSet(args.dataset, params)
+    eval_graph = dataset.build_eval_graph()
+    all_triplets = dataset.total_triplets()
 
     # prepare model
-    model = MGCN_Net(params)
+    model = MGCN(dataset.n_entity, dataset.num_relations,
+                 params.n_bases, params.dropout)
     utils.load_checkpoint(os.path.join(model_dir, 'last.ckpt'), model)
     model.to(params.device)
 
@@ -96,4 +94,4 @@ if __name__ == '__main__':
 
     # train and evaluate the model
     logging.info('Starting training for {} epoch(s)'.format(params.epoch_num))
-    evaluate(model, test_data_iterator, params, mark='Test', verbose=True)
+    evaluate(model, dataset.test_triplets, all_triplets, eval_graph, params, mark='Test', verbose=True)

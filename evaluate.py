@@ -30,9 +30,10 @@ def evaluate(model, eval_triplets, all_triplets, eval_graph, params, mark='Eval'
     model.eval()
 
     with torch.no_grad():
-        entity_embedding = model(eval_graph.entity, eval_graph.edge_index, eval_graph.edge_type, eval_graph.edge_norm)
-
-    mrr = calc_mrr(entity_embedding, model.relation_embedding, eval_triplets, all_triplets, hits=[1, 3, 10])
+        # entity_embedding = model(eval_graph.entity, eval_graph.edge_index, eval_graph.edge_type, eval_graph.edge_norm)
+        entity_embedding = model.entity_embedding.weight.data.cpu()
+        relation_embedding = model.relation_embedding.data.cpu()
+        mrr = calc_mrr(entity_embedding, relation_embedding, eval_triplets, all_triplets, hits=[1, 3, 10])
 
     # logging and report
     metrics = {}

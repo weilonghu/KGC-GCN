@@ -17,6 +17,7 @@ class DataSet:
         self.sample_size = params.sample_size
         self.split_size = params.split_size
         self.negative_rate = params.negative_rate
+        self.device = params.device
 
         # whether dataset exists
         assert os.path.exists(os.path.join(
@@ -24,14 +25,14 @@ class DataSet:
 
         # the following operations only run once
         # load entites and relations
-        self.entity2id = self.load_entries(self.dataset)
-        self.relation2id = self.load_entries(self.dataset, load_entities=False)
+        self.entity2id = self._load_entries(self.dataset)
+        self.relation2id = self._load_entries(self.dataset, load_entities=False)
 
         self.n_entity = len(self.entity2id)
         self.n_relation = len(self.relation2id)
 
         # load traiplets
-        self.train_triplets, self.valid_triplets, self.test_triplets = self.load_data()
+        self.train_triplets, self.valid_triplets, self.test_triplets = self._load_data()
 
     def total_triplets(self):
         """Get all triplets for evaluation"""
@@ -44,9 +45,9 @@ class DataSet:
         because of the 'filtering' setting in evaluation
         """
         # load triplets for training set, valid set and test set
-        train_triplets = self.load_triplets(self.dataset, 'train')
-        valid_triplets = self.load_triplets(self.dataset, 'valid')
-        test_triplets = self.load_triplets(self.dataset, 'test')
+        train_triplets = self._load_triplets(self.dataset, 'train')
+        valid_triplets = self._load_triplets(self.dataset, 'valid')
+        test_triplets = self._load_triplets(self.dataset, 'test')
 
         return train_triplets, valid_triplets, test_triplets
 
@@ -64,7 +65,7 @@ class DataSet:
         with open(os.path.join('data', dataset, entry_file), 'r') as f:
             for line in f.readlines():
                 eid, entry = line.strip().split()
-                entries[entry] = eid
+                entries[entry] = int(eid)
 
         # logging
         entry_name = 'entities' if load_entities else 'relations'
@@ -179,11 +180,13 @@ class DataSet:
         data.samples = torch.from_numpy(samples)
         data.labels = torch.from_numpy(labels)
 
+        data.to(self.device)
+
         return data
 
-    def build_eval_graph(self, triplets):
+    def build_eval_graph(self):
         """Used to produce embeddings for evaluation"""
-        src, rel, dst = triplets.transpose()
+        src, rel, dst = self.train_triplets.transpose()
 
         src = torch.from_numpy(src)
         rel = torch.from_numpy(rel)
@@ -200,5 +203,7 @@ class DataSet:
         data.entity = torch.from_numpy(np.arange(self.n_entity))
         data.edge_type = edge_type
         data.edge_norm = self._edge_normalization(edge_type, edge_index, self.n_entity, self.n_relation)
+
+        data.to(self.device)
 
         return data

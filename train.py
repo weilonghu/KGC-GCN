@@ -7,7 +7,7 @@ import random
 
 import torch
 import torch.nn as nn
-from tqdm import trange
+from tqdm import trange, tqdm
 
 import utils
 from model import MGCN
@@ -35,7 +35,6 @@ def train(model, dataset, optimizer, params):
 
     # compute model output and loss
     train_data = dataset.build_train_graph()
-    train_data.to(params.device)
     entity_embedding = model(
         train_data.entity, train_data.edge_index,
         train_data.edge_type, train_data.edge_norm)
@@ -70,10 +69,9 @@ def train_and_evaluate(model, dataset, optimizer, params, model_dir, restore_dir
     eval_graph = dataset.build_eval_graph()
 
     # use tqdm for progress bar
-    epochs = trange(params.epoch_num)
-    for epoch in epochs:
+    for epoch in trange(1, (params.epoch_num + 1), desc='Epochs', position=0):
         # run one epoch
-        logging.info('Epoch {}/{}'.format(epoch + 1, params.epoch_num))
+        # logging.info('Epoch {}/{}'.format(epoch + 1, params.epoch_num))
 
         # train for one epoch on training set
         train(model, dataset, optimizer, params)
@@ -134,7 +132,7 @@ if __name__ == '__main__':
     dataset = DataSet(args.dataset, params)
 
     # prepare model
-    model = MGCN(dataset.n_entity, dataset.num_relations,
+    model = MGCN(dataset.n_entity, dataset.n_relation,
                  params.n_bases, params.dropout)
     model.to(params.device)
 

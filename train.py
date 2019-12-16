@@ -7,7 +7,7 @@ import random
 
 import torch
 import torch.nn as nn
-from tqdm import trange, tqdm
+from tqdm import trange
 
 import utils
 from model import MGCN
@@ -76,27 +76,28 @@ def train_and_evaluate(model, dataset, optimizer, params, model_dir, restore_dir
         # train for one epoch on training set
         train(model, dataset, optimizer, params)
 
-        val_metrics = evaluate(model, eval_triplets, all_triplets, eval_graph, params, mark='Val')
-        val_measure = val_metrics['measure']
-        improve_measure = val_measure - best_measure
-        if improve_measure > 0:
-            logging.info('- Found new best measure')
-            best_measure = val_measure
-            state = {'state_dict': model.state_dict(
-            ), 'optim_dict': optimizer.state_dict()}
-            utils.save_checkpoint(state, is_best=False,
-                                  checkpoint_dir=model_dir)
-            if improve_measure < params.patience:
-                patience_counter += 1
+        if epoch % params.eval_every == 0:
+            val_metrics = evaluate(model, eval_triplets, all_triplets, eval_graph, params, mark='Val')
+            val_measure = val_metrics['measure']
+            improve_measure = val_measure - best_measure
+            if improve_measure > 0:
+                logging.info('- Found new best measure')
+                best_measure = val_measure
+                state = {'state_dict': model.state_dict(
+                ), 'optim_dict': optimizer.state_dict()}
+                utils.save_checkpoint(state, is_best=False,
+                                      checkpoint_dir=model_dir)
+                if improve_measure < params.patience:
+                    patience_counter += 1
+                else:
+                    patience_counter = 0
             else:
-                patience_counter = 0
-        else:
-            patience_counter += 1
+                patience_counter += 1
 
-        # early stopping and logging best measure
-        if (patience_counter >= params.patience_num and epoch > params.min_epoch_num) or epoch == params.epoch_num:
-            logging.info("Best val measure: {:05.2f}".format(best_measure))
-            break
+            # early stopping and logging best measure
+            if (patience_counter >= params.patience_num and epoch > params.min_epoch_num) or epoch == params.epoch_num:
+                logging.info("Best val measure: {:05.2f}".format(best_measure))
+                break
 
 
 if __name__ == '__main__':

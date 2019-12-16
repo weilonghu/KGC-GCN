@@ -2,7 +2,6 @@
 
 import torch
 import numpy as np
-from tqdm import tqdm
 
 
 def sort_and_rank(score, target):
@@ -13,7 +12,18 @@ def sort_and_rank(score, target):
 
 
 def calc_mrr(embedding, w, test_triplets, all_triplets, hits=[]):
-    """Calculate MRR (filtered) and Hits @ (1, 3, 10)"""
+    """Calculate MRR (filtered) and Hits @ (1, 3, 10)
+
+    Args:
+        embeddings: entity embeddings
+        w: relation embeddings
+        test_triplets: (2-d array) triplets in test set
+        all_triplets: (2-d array) triplets in train, valid and test set
+        hits: (list)
+
+    Return:
+        filtered MRR and Hit@n
+    """
     test_triplets = torch.from_numpy(test_triplets)
     all_triplets = torch.from_numpy(all_triplets)
 
@@ -23,7 +33,7 @@ def calc_mrr(embedding, w, test_triplets, all_triplets, hits=[]):
     head_relation_triplets = all_triplets[:, :2]
     tail_relation_triplets = torch.stack((all_triplets[:, 2], all_triplets[:, 1])).transpose(0, 1)
 
-    for test_triplet in tqdm(test_triplets):
+    for test_triplet in test_triplets:
 
         # Perturb object
         subject = test_triplet[0]

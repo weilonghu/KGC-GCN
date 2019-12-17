@@ -36,8 +36,8 @@ def train(model, dataset, optimizer, params):
     # compute model output and loss
     train_data = dataset.build_train_graph()
     entity_embedding = model(
-        train_data.entity, train_data.edge_index,
-        train_data.edge_type, train_data.edge_norm)
+        train_data.edge_index,
+        train_data.edge_type, train_data.edge_ids)
     loss = model.score_loss(entity_embedding, train_data.samples, train_data.labels) + \
         params.regularization * model.reg_loss(entity_embedding)
 
@@ -63,10 +63,9 @@ def train_and_evaluate(model, dataset, optimizer, params, model_dir, restore_dir
     # early stopping
     patience_counter = 0
 
-    # evaluation triplet and graph
+    # evaluation triplet
     eval_triplets = dataset.valid_triplets
     all_triplets = dataset.total_triplets()
-    eval_graph = dataset.build_eval_graph()
 
     # use tqdm for progress bar
     for epoch in trange(1, (params.epoch_num + 1), desc='Epochs', position=0):
@@ -77,7 +76,7 @@ def train_and_evaluate(model, dataset, optimizer, params, model_dir, restore_dir
         train(model, dataset, optimizer, params)
 
         if epoch % params.eval_every == 0:
-            val_metrics = evaluate(model, eval_triplets, all_triplets, eval_graph, params, mark='Val')
+            val_metrics = evaluate(model, eval_triplets, all_triplets, params, mark='Val')
             val_measure = val_metrics['measure']
             improve_measure = val_measure - best_measure
             if improve_measure > 0:
@@ -131,10 +130,11 @@ if __name__ == '__main__':
     logging.info('Loading the dataset...')
 
     dataset = DataSet(args.dataset, params)
+    num_edges = dataset.train_triplets.shape[0]
 
     # prepare model
-    model = MGCN(dataset.n_entity, dataset.n_relation,
-                 params.n_bases, params.dropout)
+    model = MGCN(dataset.n_entity, dataset.n_relation, num_edges,
+                 params.emb_dim, params.dropout)
     model.to(params.device)
 
     if params.n_gpu > 1 and args.multi_gpu:

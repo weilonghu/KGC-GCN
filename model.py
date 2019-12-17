@@ -2,32 +2,48 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn.conv import MessagePassing
-
-from utils import uniform
+from torch_geometric.utils import add_self_loops, degree
 
 
 class MGCN(torch.nn.Module):
-    def __init__(self, num_entities, num_relations, num_bases, dropout):
+    """ Model using global and local relation embeddings for multi-graph knowledge graph embedding
+
+    Attributes:
+        entity_embedding: resulted entity embeddings
+        relation_embedding: resulted relation embeddings, global relation embeddings
+        edge_embedding: local relation embeddings
+    """
+    def __init__(self, num_entities, num_relations, num_edges, emb_dim, dropout):
         super(MGCN, self).__init__()
 
-        self.entity_embedding = nn.Embedding(num_entities, 100)
-        self.relation_embedding = nn.Parameter(torch.Tensor(num_relations, 100))
+        self.entity_embedding = nn.Embedding(num_entities, emb_dim)
+        self.relation_embedding = nn.Embedding(num_relations, emb_dim)
+        self.edge_embedding = nn.Embedding(num_edges, emb_dim)
 
+        nn.init.xavier_uniform_(self.entity_embedding, gain=nn.init.calculate_gain('relu'))
         nn.init.xavier_uniform_(self.relation_embedding, gain=nn.init.calculate_gain('relu'))
+        nn.init.xavier_uniform_(self.edge_embedding, gain=nn.init.calculate_gain('relu'))
 
-        self.conv1 = MGCNConv(
-            100, 100, num_relations * 2, num_bases=num_bases)
-        self.conv2 = MGCNConv(
-            100, 100, num_relations * 2, num_bases=num_bases)
+        self.conv1 = MGCNConv(emb_dim, emb_dim)
+        self.conv2 = MGCNConv(emb_dim, emb_dim)
 
         self.dropout_ratio = dropout
 
-    def forward(self, entity, edge_index, edge_type, edge_norm):
-        x = self.entity_embedding(entity)
-        x = self.conv1(x, edge_index, edge_type, edge_norm)
-        x = F.relu(self.conv1(x, edge_index, edge_type, edge_norm))
+    def forward(self, edge_index, edge_type, edge_ids):
+        """Compute loss of using the embeddings and triplets
+
+        Args:
+            edge_index: edges of the sampled graph. shape: [2, E]
+            edge_type: relation types of each edge. shape: [E]
+            edge_ids: edge indices in triplets file. shape: [E]
+        """
+        # construct edge_attr using global and local relation embeddings
+        edge_attr = self.relation_embedding(edge_type) * self.edge_embedding(edge_ids)
+        x = self.entity_embedding
+        x = self.conv1(x, edge_index, edge_attr)
+        x = F.relu(self.conv1(x, edge_index, edge_attr))
         x = F.dropout(x, p=self.dropout_ratio, training=self.training)
-        x = self.conv2(x, edge_index, edge_type, edge_norm)
+        x = self.conv2(x, edge_index, edge_attr)
 
         return x
 
@@ -49,95 +65,53 @@ class MGCN(torch.nn.Module):
 
 
 class MGCNConv(MessagePassing):
-    r"""The relational graph convolutional operator from the `"Modeling
-    Relational Data with Graph Convolutional Networks"
-    <https://arxiv.org/abs/1703.06103>`_ paper
-    .. math::
-        \mathbf{x}^{\prime}_i = \mathbf{\Theta}_{\textrm{root}} \cdot
-        \mathbf{x}_i + \sum_{r \in \mathcal{R}} \sum_{j \in \mathcal{N}_r(i)}
-        \frac{1}{|\mathcal{N}_r(i)|} \mathbf{\Theta}_r \cdot \mathbf{x}_j,
-    where :math:`\mathcal{R}` denotes the set of relations, *i.e.* edge types.
-    Edge type needs to be a one-dimensional :obj:`torch.long` tensor which
-    stores a relation identifier
-    :math:`\in \{ 0, \ldots, |\mathcal{R}| - 1\}` for each edge.
+    """The relational graph convolutional operator
+
     Args:
         in_channels (int): Size of each input sample.
         out_channels (int): Size of each output sample.
-        num_relations (int): Number of relations.
-        num_bases (int): Number of bases used for basis-decomposition.
-        root_weight (bool, optional): If set to :obj:`False`, the layer will
-            not add transformed root node features to the output.
-            (default: :obj:`True`)
-        bias (bool, optional): If set to :obj:`False`, the layer will not learn
-            an additive bias. (default: :obj:`True`)
-        **kwargs (optional): Additional arguments of
-            :class:`torch_geometric.nn.conv.MessagePassing`.
+        **kwargs (optional): Additional arguments of.
     """
 
-    def __init__(self, in_channels, out_channels, num_relations, num_bases,
-                 root_weight=True, bias=True, **kwargs):
+    def __init__(self, in_channels, out_channels, **kwargs):
         super(MGCNConv, self).__init__(aggr='mean', **kwargs)
 
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.num_relations = num_relations
-        self.num_bases = num_bases
 
-        self.basis = nn.Parameter(torch.Tensor(num_bases, in_channels, out_channels))
-        self.att = nn.Parameter(torch.Tensor(num_relations, num_bases))
+    def forward(self, x, edge_index, edge_attr):
+        """Perform message passing operator
 
-        if root_weight:
-            self.root = nn.Parameter(torch.Tensor(in_channels, out_channels))
-        else:
-            self.register_parameter('root', None)
+        Args:
+            x: (tensor) node features. shape: [N, in_channels]
+            edge_index: (tensor) edges. shape: [2, E]
+            edge_attr: (tensor) local edge embeddings. shape: [E, d]
+        """
+        # add self-loops to the adjacency matrix
+        edge_index, _ = add_self_loops(edge_index, num_nodes=x.size(0))
 
-        if bias:
-            self.bias = nn.Parameter(torch.Tensor(out_channels))
-        else:
-            self.register_parameter('bias', None)
+        return self.propagate(edge_index, size=(x.size(0), x.size(0)), x=x, edge_attr=edge_attr)
 
-        self.reset_parameters()
+    def message(self, x_j, edge_index, size, edge_attr):
+        """
+        Construct messages to node i in analogy to ϕ for each edge in (j, i).
 
-    def reset_parameters(self):
-        size = self.num_bases * self.in_channels
-        uniform(size, self.basis)
-        uniform(size, self.att)
-        uniform(size, self.root)
-        uniform(size, self.bias)
+        Args:
+            x_j: embeddings of node j. shape: [E, d]
+            edge_index: respective edges. shape: [E]
+            edge_attr: edge embeddings. shape: [E, d]
+        """
+        # transform node features using edge features
+        x_j = x_j * edge_attr
 
-    def forward(self, x, edge_index, edge_type, edge_norm=None, size=None):
-        """"""
-        return self.propagate(edge_index, size=size, x=x, edge_type=edge_type,
-                              edge_norm=edge_norm)
+        # normalize node fetures
+        row, col = edge_index
+        deg = degree(row, size[0], dtype=x_j.dtype)
+        deg_inv_sqrt = deg.pow(-0.5)
+        norm = deg_inv_sqrt[row] * deg_inv_sqrt[col]
 
-    def message(self, x_j, edge_index_j, edge_type, edge_norm):
-        w = torch.matmul(self.att, self.basis.view(self.num_bases, -1))
+        return norm.view(-1, 1) * x_j
 
-        # If no node features are given, we implement a simple embedding
-        # loopkup based on the target node index and its edge type.
-        if x_j is None:
-            w = w.view(-1, self.out_channels)
-            index = edge_type * self.in_channels + edge_index_j
-            out = torch.index_select(w, 0, index)
-        else:
-            w = w.view(self.num_relations, self.in_channels, self.out_channels)
-            w = torch.index_select(w, 0, edge_type)
-            out = torch.bmm(x_j.unsqueeze(1), w).squeeze(-2)
-
-        return out if edge_norm is None else out * edge_norm.view(-1, 1)
-
-    def update(self, aggr_out, x):
-        if self.root is not None:
-            if x is None:
-                out = aggr_out + self.root
-            else:
-                out = aggr_out + torch.matmul(x, self.root)
-
-        if self.bias is not None:
-            out = out + self.bias
-        return out
-
-    def __repr__(self):
-        return '{}({}, {}, num_relations={})'.format(
-            self.__class__.__name__, self.in_channels, self.out_channels,
-            self.num_relations)
+    def update(self, aggr_out):
+        """ Return new node embeddings, aggr_out has shape [N, out_channels]"""
+        return aggr_out

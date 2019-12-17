@@ -24,7 +24,7 @@ parser.add_argument('--multi_gpu', default=False, action='store_true',
                     help="Whether to use multiple GPUs if available")
 
 
-def evaluate(model, eval_triplets, all_triplets, eval_graph, params, mark='Eval', verbose=False):
+def evaluate(model, eval_triplets, all_triplets, params, mark='Eval', verbose=False):
     """Evaluate the model on dataset 'data'"""
     # set the model to evaluation mode
     model.eval()
@@ -32,13 +32,11 @@ def evaluate(model, eval_triplets, all_triplets, eval_graph, params, mark='Eval'
     with torch.no_grad():
         # entity_embedding = model(eval_graph.entity, eval_graph.edge_index, eval_graph.edge_type, eval_graph.edge_norm)
         entity_embedding = model.entity_embedding.weight.data.cpu()
-        relation_embedding = model.relation_embedding.data.cpu()
-        mrr = calc_mrr(entity_embedding, relation_embedding, eval_triplets, all_triplets, hits=[1, 3, 10])
+        relation_embedding = model.relation_embedding.weight.data.cpu()
+        metrics = calc_mrr(entity_embedding, relation_embedding, eval_triplets, all_triplets, hits=[1, 3, 10])
 
     # logging and report
-    metrics = {}
-    metrics['mrr'] = mrr
-    metrics['measure'] = mrr
+    metrics['measure'] = metrics['mrr']
     metrics_str = "; ".join("{}: {:05.2f}".format(k, v)
                             for k, v in metrics.items())
     logging.info("- {} metrics: ".format(mark) + metrics_str)
@@ -77,7 +75,6 @@ if __name__ == '__main__':
     logging.info('Loading the dataset...')
 
     dataset = DataSet(args.dataset, params)
-    eval_graph = dataset.build_eval_graph()
     all_triplets = dataset.total_triplets()
 
     # prepare model
@@ -95,4 +92,4 @@ if __name__ == '__main__':
 
     # train and evaluate the model
     logging.info('Starting training for {} epoch(s)'.format(params.epoch_num))
-    evaluate(model, dataset.test_triplets, all_triplets, eval_graph, params, mark='Test', verbose=True)
+    evaluate(model, dataset.test_triplets, all_triplets, params, mark='Test', verbose=True)

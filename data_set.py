@@ -5,15 +5,12 @@ import logging
 
 import numpy as np
 import torch
-import torch.nn.functional as F
-from torch_scatter import scatter_add
 from torch_geometric.data import Data
 
 
 class DataSet:
     def __init__(self, dataset, params):
         self.dataset = dataset
-        self.vector_size = params.vector_size
         self.sample_size = params.sample_size
         self.split_size = params.split_size
         self.negative_rate = params.negative_rate
@@ -126,16 +123,6 @@ class DataSet:
 
         return np.concatenate((pos_samples, neg_samples)), labels
 
-    def _edge_normalization(self, edge_type, edge_index, num_entiry, num_relation):
-        """Edge normalization trick
-        """
-        one_hot = F.one_hot(edge_type, num_classes=2 * num_relation).to(torch.float)
-        deg = scatter_add(one_hot, edge_index[0], dim=0, dim_size=num_entiry)
-        index = edge_type + torch.arange(len(edge_index[0])) * (2 * num_relation)
-        edge_norm = 1 / deg[edge_index[0]].view(-1)[index]
-
-        return edge_norm
-
     def build_train_graph(self):
         """Get training graph and signals
         First perform edge neighborhood sampling on graph,
@@ -145,10 +132,10 @@ class DataSet:
         split_size = self.split_size
         negative_rate = self.negative_rate
 
-        edges = self._sample_edge_uniform(len(self.train_triplets), sample_size)
+        edge_ids = self._sample_edge_uniform(len(self.train_triplets), sample_size)
 
         # select sampled edges
-        edges = self.train_triplets[edges]
+        edges = self.train_triplets[edge_ids]
         src, rel, dst = edges.transpose()
         uniq_entity, edges = np.unique((src, dst), return_inverse=True)
         src, dst = np.reshape(edges, (2, -1))
@@ -165,44 +152,21 @@ class DataSet:
         src = torch.LongTensor(src[graph_split_ids]).contiguous()
         dst = torch.LongTensor(dst[graph_split_ids]).contiguous()
         rel = torch.LongTensor(rel[graph_split_ids]).contiguous()
+        edge_ids = torch.LongTensor(edge_ids[graph_split_ids]).contiguous()
 
         # create bi-directional graph
-        src, dst = torch.cat((src, dst)), torch.cat((dst, src))
-        rel = torch.cat((rel, rel + self.n_relation))
+        # src, dst = torch.cat((src, dst)), torch.cat((dst, src))
+        # rel = torch.cat((rel, rel + self.n_relation))
 
         edge_index = torch.stack((src, dst))
         edge_type = rel
 
         data = Data(edge_index=edge_index)
-        data.entity = torch.from_numpy(uniq_entity)
+        # data.entity = torch.from_numpy(uniq_entity)
         data.edge_type = edge_type
-        data.edge_norm = self._edge_normalization(edge_type, edge_index, len(uniq_entity), self.n_relation)
+        # data.edge_norm = self._edge_normalization(edge_type, edge_index, len(uniq_entity), self.n_relation)
         data.samples = torch.from_numpy(samples)
         data.labels = torch.from_numpy(labels)
-
-        data.to(self.device)
-
-        return data
-
-    def build_eval_graph(self):
-        """Used to produce embeddings for evaluation"""
-        src, rel, dst = self.train_triplets.transpose()
-
-        src = torch.from_numpy(src)
-        rel = torch.from_numpy(rel)
-        dst = torch.from_numpy(dst)
-
-        # create bi-directional graph
-        src, dst = torch.cat((src, dst)), torch.cat((dst, src))
-        rel = torch.cat((rel, rel + self.n_relation))
-
-        edge_index = torch.stack((src, dst))
-        edge_type = rel
-
-        data = Data(edge_index=edge_index)
-        data.entity = torch.from_numpy(np.arange(self.n_entity))
-        data.edge_type = edge_type
-        data.edge_norm = self._edge_normalization(edge_type, edge_index, self.n_entity, self.n_relation)
 
         data.to(self.device)
 

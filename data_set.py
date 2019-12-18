@@ -15,6 +15,17 @@ class DataSet:
         self.split_size = params.split_size
         self.negative_rate = params.negative_rate
         self.device = params.device
+        self.emb_dim = params.emb_dim
+
+        # load pretrained embeddings if need
+        if params.load_pretrain:
+            self.pretrained_entity = self._load_pretrained_emb(
+                os.path.join('data', self.dataset, 'entity2vec.txt')
+            )
+
+            self.pretrained_relation = self._load_pretrained_emb(
+                os.path.join('data', self.dataset, 'relation2vec.txt')
+            )
 
         # whether dataset exists
         assert os.path.exists(os.path.join(
@@ -49,7 +60,7 @@ class DataSet:
         return train_triplets, valid_triplets, test_triplets
 
     def _load_entries(self, dataset, load_entities=True):
-        """Load entities or relations from file, i.e. entities.dict or relations.dict
+        """Load entities or relations from file, i.e. entity2id.txt or relation2id.txt
 
         Args:
             dataset: (string) dataset name
@@ -58,10 +69,10 @@ class DataSet:
             entries2idx: (dict) map each entry to a number
         """
         entries = {}
-        entry_file = 'entities.dict' if load_entities else 'relations.dict'
+        entry_file = 'entity2id.txt' if load_entities else 'relation2id.txt'
         with open(os.path.join('data', dataset, entry_file), 'r') as f:
             for line in f.readlines():
-                eid, entry = line.strip().split()
+                entry, eid = line.strip().split()
                 entries[entry] = int(eid)
 
         # logging
@@ -85,13 +96,22 @@ class DataSet:
         triplets = []
         with open(os.path.join('data', dataset, data_type + '.txt'), 'r') as f:
             for line in f.readlines():
-                head, relation, tail = line.strip().split()
+                head, tail, relation = line.strip().split()
                 triplets.append((self.entity2id[head], self.relation2id[relation], self.entity2id[tail]))
 
         logging.info('Found {} triplets in {}.txt from dataset {}'.format(
             len(triplets), data_type, dataset))
 
         return np.array(triplets)
+
+    def _load_pretrained_emb(self, emb_file):
+        """Load pretrained entity or relation embeddings from file if exists"""
+        embeddings = []
+        with open(emb_file, 'r') as f:
+            for line in f:
+                emb = [float(n) for n in line.strip().split()]
+                embeddings.append(emb)
+        return torch.from_numpy(np.array(embeddings))
 
     def _sample_edge_uniform(self, n_triples, sample_size):
         """Generate the edge indices to sample"""
@@ -162,8 +182,9 @@ class DataSet:
         edge_type = rel
 
         data = Data(edge_index=edge_index)
-        # data.entity = torch.from_numpy(uniq_entity)
+        data.entity = torch.from_numpy(uniq_entity)
         data.edge_type = edge_type
+        data.edge_ids = edge_ids
         # data.edge_norm = self._edge_normalization(edge_type, edge_index, len(uniq_entity), self.n_relation)
         data.samples = torch.from_numpy(samples)
         data.labels = torch.from_numpy(labels)
@@ -171,3 +192,6 @@ class DataSet:
         data.to(self.device)
 
         return data
+
+    def build_eval_graph(self):
+        pass

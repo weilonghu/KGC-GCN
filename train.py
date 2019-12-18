@@ -16,7 +16,7 @@ from data_set import DataSet
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--dataset', default='wn18',
+parser.add_argument('--dataset', default='FB15k-237',
                     help="Directory containing the dataset")
 parser.add_argument('--seed', default=2019,
                     help="random seed for initialization")
@@ -36,7 +36,7 @@ def train(model, dataset, optimizer, params):
     # compute model output and loss
     train_data = dataset.build_train_graph()
     entity_embedding = model(
-        train_data.edge_index,
+        train_data.entity, train_data.edge_index,
         train_data.edge_type, train_data.edge_ids)
     loss = model.score_loss(entity_embedding, train_data.samples, train_data.labels) + \
         params.regularization * model.reg_loss(entity_embedding)
@@ -135,6 +135,9 @@ if __name__ == '__main__':
     # prepare model
     model = MGCN(dataset.n_entity, dataset.n_relation, num_edges,
                  params.emb_dim, params.dropout)
+    if params.load_pretrain:
+        model.from_pretrained_emb(dataset.pretrained_entity,
+                                  dataset.pretrained_relation)
     model.to(params.device)
 
     if params.n_gpu > 1 and args.multi_gpu:

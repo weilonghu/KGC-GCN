@@ -20,16 +20,21 @@ class MGCN(torch.nn.Module):
         self.relation_embedding = nn.Embedding(num_relations, emb_dim)
         self.edge_embedding = nn.Embedding(num_edges, emb_dim)
 
-        nn.init.xavier_uniform_(self.entity_embedding, gain=nn.init.calculate_gain('relu'))
-        nn.init.xavier_uniform_(self.relation_embedding, gain=nn.init.calculate_gain('relu'))
-        nn.init.xavier_uniform_(self.edge_embedding, gain=nn.init.calculate_gain('relu'))
+        nn.init.xavier_uniform_(self.edge_embedding.weight.data)
+        nn.init.xavier_uniform_(self.entity_embedding.weight.data)
+        nn.init.xavier_uniform_(self.relation_embedding.weight.data)
 
         self.conv1 = MGCNConv(emb_dim, emb_dim)
         self.conv2 = MGCNConv(emb_dim, emb_dim)
 
         self.dropout_ratio = dropout
 
-    def forward(self, edge_index, edge_type, edge_ids):
+    def from_pretrained_emb(self, pretrained_entity, pretrained_relation):
+        """Initialize entity and relation embeddings using pretrained embeddings"""
+        self.entity_embedding.from_pretrained(pretrained_entity)
+        self.relation_embedding.from_pretrained(pretrained_relation)
+
+    def forward(self, entity, edge_index, edge_type, edge_ids):
         """Compute loss of using the embeddings and triplets
 
         Args:
@@ -39,7 +44,7 @@ class MGCN(torch.nn.Module):
         """
         # construct edge_attr using global and local relation embeddings
         edge_attr = self.relation_embedding(edge_type) * self.edge_embedding(edge_ids)
-        x = self.entity_embedding
+        x = self.entity_embedding(entity)
         x = self.conv1(x, edge_index, edge_attr)
         x = F.relu(self.conv1(x, edge_index, edge_attr))
         x = F.dropout(x, p=self.dropout_ratio, training=self.training)
@@ -49,7 +54,7 @@ class MGCN(torch.nn.Module):
 
     def distmult(self, embedding, triplets):
         s = embedding[triplets[:, 0]]
-        r = self.relation_embedding[triplets[:, 1]]
+        r = self.relation_embedding(triplets[:, 1])
         o = embedding[triplets[:, 2]]
         score = torch.sum(s * r * o, dim=1)
 
@@ -61,7 +66,7 @@ class MGCN(torch.nn.Module):
         return F.binary_cross_entropy_with_logits(score, target)
 
     def reg_loss(self, embedding):
-        return torch.mean(embedding.pow(2)) + torch.mean(self.relation_embedding.pow(2))
+        return torch.mean(embedding.pow(2)) + torch.mean(self.relation_embedding.weight.data.pow(2))
 
 
 class MGCNConv(MessagePassing):
@@ -79,6 +84,8 @@ class MGCNConv(MessagePassing):
         self.in_channels = in_channels
         self.out_channels = out_channels
 
+        self.loop_emb = nn.Parameter(torch.Tensor(in_channels))
+
     def forward(self, x, edge_index, edge_attr):
         """Perform message passing operator
 
@@ -89,6 +96,7 @@ class MGCNConv(MessagePassing):
         """
         # add self-loops to the adjacency matrix
         edge_index, _ = add_self_loops(edge_index, num_nodes=x.size(0))
+        edge_attr = torch.cat((edge_attr, self.loop_emb.repeat(x.size(0), 1)), dim=0)
 
         return self.propagate(edge_index, size=(x.size(0), x.size(0)), x=x, edge_attr=edge_attr)
 

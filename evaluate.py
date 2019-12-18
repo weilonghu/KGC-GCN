@@ -4,6 +4,7 @@ import argparse
 import random
 import logging
 import os
+import timeit
 
 import torch
 
@@ -30,10 +31,11 @@ def evaluate(model, eval_triplets, all_triplets, params, mark='Eval', verbose=Fa
     model.eval()
 
     with torch.no_grad():
-        # entity_embedding = model(eval_graph.entity, eval_graph.edge_index, eval_graph.edge_type, eval_graph.edge_norm)
+        start = timeit.default_timer()
         entity_embedding = model.entity_embedding.weight.data.cpu()
         relation_embedding = model.relation_embedding.weight.data.cpu()
         metrics = calc_mrr(entity_embedding, relation_embedding, eval_triplets, all_triplets, hits=[1, 3, 10])
+        logging.info('cost time: {:.3f}s'.format(timeit.default_timer() - start))
 
     # logging and report
     metrics['measure'] = metrics['mrr']

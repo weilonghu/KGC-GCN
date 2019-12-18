@@ -1,0 +1,20 @@
+{
+    "learning_rate": 1e-2,
+    "weight_decay": 0.01,
+    "clip_grad": 1.0,
+
+    "epoch_num": 10000,
+    "min_epoch_num": 1000,
+    "eval_every": 1,
+    "patience": 0.02,
+    "patience_num": 10,
+
+    "regularization": 1e-2,
+    "emb_dim": 50,
+    "sample_size": 50000,
+    "split_size": 0.5,
+    "negative_rate": 1,
+    "dropout": 0.2,
+
+    "load_pretrain": true
+}

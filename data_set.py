@@ -11,8 +11,6 @@ from torch_geometric.data import Data
 class DataSet:
     def __init__(self, dataset, params):
         self.dataset = dataset
-        self.sample_size = params.sample_size
-        self.split_size = params.split_size
         self.negative_rate = params.negative_rate
         self.device = params.device
         self.emb_dim = params.emb_dim
@@ -113,10 +111,6 @@ class DataSet:
                 embeddings.append(emb)
         return torch.from_numpy(np.array(embeddings))
 
-    def _sample_edge_uniform(self, n_triples, sample_size):
-        """Generate the edge indices to sample"""
-        return np.random.choice(np.arange(n_triples), sample_size, replace=False)
-
     def _negative_sampling(self, pos_samples, num_entity, negative_rate):
         """Sample negative triplets for training
 
@@ -144,54 +138,52 @@ class DataSet:
         return np.concatenate((pos_samples, neg_samples)), labels
 
     def build_train_graph(self):
-        """Get training graph and signals
-        First perform edge neighborhood sampling on graph,
-        then perform negative sampling to generate negative samples
+        """Build graph using training set
+
+        Attributes:
+            edge_index: node indexes of edges, shape: [2, E]
+            edge_attr: edge attributes, including edge id and edge type, shape: [E, 2]
         """
-        sample_size = self.sample_size
-        split_size = self.split_size
-        negative_rate = self.negative_rate
-
-        edge_ids = self._sample_edge_uniform(len(self.train_triplets), sample_size)
-
-        # select sampled edges
-        edges = self.train_triplets[edge_ids]
-        src, rel, dst = edges.transpose()
-        uniq_entity, edges = np.unique((src, dst), return_inverse=True)
-        src, dst = np.reshape(edges, (2, -1))
-        relabeled_edges = np.stack((src, rel, dst)).transpose()
-
-        # Negative sampling
-        samples, labels = self._negative_sampling(relabeled_edges, len(uniq_entity), negative_rate)
-
-        # further split graph, only half of the edges will be used as graph structure,
-        # while the rest half is used as unseen positive samples
-        split_size = int(sample_size * split_size)
-        graph_split_ids = np.random.choice(np.arange(sample_size), size=split_size, replace=False)
-
-        src = torch.LongTensor(src[graph_split_ids]).contiguous()
-        dst = torch.LongTensor(dst[graph_split_ids]).contiguous()
-        rel = torch.LongTensor(rel[graph_split_ids]).contiguous()
-        edge_ids = torch.LongTensor(edge_ids[graph_split_ids]).contiguous()
-
-        # create bi-directional graph
-        # src, dst = torch.cat((src, dst)), torch.cat((dst, src))
-        # rel = torch.cat((rel, rel + self.n_relation))
+        src, rel, dst = self.train_triplets.transpose()
+        src, rel, dst = torch.from_numpy(src), torch.from_numpy(rel), torch.from_numpy(dst)
 
         edge_index = torch.stack((src, dst))
-        edge_type = rel
+        edge_attr = torch.cat((torch.arange(edge_index.size(1)).view(1, -1), rel.view(1, -1)), dim=0).transpose(0,1)
+        data = Data(edge_index=edge_index, edge_attr=edge_attr)
 
-        data = Data(edge_index=edge_index)
-        data.entity = torch.from_numpy(uniq_entity)
-        data.edge_type = edge_type
-        data.edge_ids = edge_ids
-        # data.edge_norm = self._edge_normalization(edge_type, edge_index, len(uniq_entity), self.n_relation)
-        data.samples = torch.from_numpy(samples)
-        data.labels = torch.from_numpy(labels)
-
-        data.to(self.device)
+        # add entity ids and mask
+        data.x = torch.arange(self.n_entity)
+        data.train_mask = torch.ones(self.n_entity, dtype=torch.bool)
 
         return data
 
-    def build_eval_graph(self):
-        pass
+
+def negative_sampling(pos_samples, num_entity, negative_rate, device):
+        """Sample negative triplets for training
+
+        Args:
+            pos_sample: positive samples
+            num_entity: (int) the number of entities
+            negative_rate: (int) the proportion of negative samples
+        Return:
+            samples: (array) samples including positive and negative samples
+            labels: (array) labels whose values in [0, 1]
+        """
+        size = len(pos_samples)
+        # genrate labels
+        labels = torch.zeros(size * (negative_rate + 1), dtype=torch.float).to(device)
+        labels[: size] = 1  # labels of positive samples
+
+        # sample negative samples
+        neg_samples = pos_samples.repeat(negative_rate, 1)
+        values = torch.zeros(size * negative_rate, dtype=torch.int64).random_(0, num_entity)
+        choices = torch.zeros(size * negative_rate).uniform_(0, 1)
+        values = values.to(device)
+        choices = choices.to(device)
+        subj, obj = choices > 0.5, choices <= 0.5
+        # subj, obj = subj.nonzero().view(-1), obj.nonzero().view(-1)
+        neg_samples[subj, 0] = values[subj]
+        neg_samples[obj, 2] = values[obj]
+
+        samples = torch.cat((pos_samples, neg_samples), dim=0)
+        return samples, labels

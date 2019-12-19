@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.nn.conv import MessagePassing
+from torch_geometric.nn.conv import MessagePassing, SAGEConv
 from torch_geometric.utils import add_self_loops, degree
 
 
@@ -25,7 +25,6 @@ class MGCN(torch.nn.Module):
         nn.init.xavier_uniform_(self.relation_embedding.weight.data)
 
         self.conv1 = MGCNConv(emb_dim, emb_dim)
-        self.conv2 = MGCNConv(emb_dim, emb_dim)
 
         self.dropout_ratio = dropout
 
@@ -34,7 +33,7 @@ class MGCN(torch.nn.Module):
         self.entity_embedding.from_pretrained(pretrained_entity)
         self.relation_embedding.from_pretrained(pretrained_relation)
 
-    def forward(self, entity, edge_index, edge_type, edge_ids):
+    def forward(self, edge_attr, data):
         """Compute loss of using the embeddings and triplets
 
         Args:
@@ -42,31 +41,51 @@ class MGCN(torch.nn.Module):
             edge_type: relation types of each edge. shape: [E]
             edge_ids: edge indices in triplets file. shape: [E]
         """
-        # construct edge_attr using global and local relation embeddings
-        edge_attr = self.relation_embedding(edge_type) * self.edge_embedding(edge_ids)
-        x = self.entity_embedding(entity)
-        x = self.conv1(x, edge_index, edge_attr)
-        x = F.relu(self.conv1(x, edge_index, edge_attr))
+        # block = data_flow[0]
+        # x = self.entity_embedding(x[block.n_id])
+        # edge_index = block.edge_index
+        # edge_ids, edge_types = edge_attr[block.e_id].transpose(0, 1)
+        # edge_attr = self.relation_embedding(edge_types) + self.edge_embedding(edge_ids)
+        # x = self.conv1(x, edge_index, edge_attr)
+        # x = F.relu(self.conv1(x, edge_index, edge_attr))
+        # x = F.dropout(x, p=self.dropout_ratio, training=self.training)
+        # x = self.conv2(x, edge_index, edge_attr)
+
+        edge_ids, edge_types = edge_attr[data.e_id].transpose(0, 1)
+        edge_attr = self.relation_embedding(edge_types)
+
+        x = self.entity_embedding(data.n_id)
+        x = F.relu(self.conv1(x, data.edge_index, edge_attr))
         x = F.dropout(x, p=self.dropout_ratio, training=self.training)
-        x = self.conv2(x, edge_index, edge_attr)
 
-        return x
+        return x, data.n_id, data.e_id, data.edge_index
 
-    def distmult(self, embedding, triplets):
+    def score_func(self, embedding, triplets):
+        """Use distmult to score triplets"""
         s = embedding[triplets[:, 0]]
         r = self.relation_embedding(triplets[:, 1])
         o = embedding[triplets[:, 2]]
-        score = torch.sum(s * r * o, dim=1)
+        score = torch.sum(torch.abs(s + r - o), dim=1)
 
         return score
 
-    def score_loss(self, embedding, triplets, target):
-        score = self.distmult(embedding, triplets)
+    def loss_func(self, embedding, triplets, target):
+        """Compute loss for the model"""
+        score = self.score_func(embedding, triplets)
 
-        return F.binary_cross_entropy_with_logits(score, target)
+        # compute loss
+        # cls_loss = F.binary_cross_entropy_with_logits(score, target)
+        # reg_loss = torch.mean(embedding.pow(2)) + torch.mean(self.relation_embedding.weight.data.pow(2))
+        pos_scores, neg_scores = score.view(2, -1)
+        loss = torch.mean(F.relu(pos_scores - neg_scores + 5))
 
-    def reg_loss(self, embedding):
-        return torch.mean(embedding.pow(2)) + torch.mean(self.relation_embedding.weight.data.pow(2))
+        # compute accuracy
+        logits = torch.sigmoid(score)
+        pred = logits >= 0.5
+        true = target >= 0.5
+        acc = torch.mean(pred.eq(true).float())
+
+        return loss, acc
 
 
 class MGCNConv(MessagePassing):
@@ -84,7 +103,9 @@ class MGCNConv(MessagePassing):
         self.in_channels = in_channels
         self.out_channels = out_channels
 
-        self.loop_emb = nn.Parameter(torch.Tensor(in_channels))
+        # self.loop_emb = nn.Parameter(torch.Tensor(in_channels))
+        self.lin1 = torch.nn.Linear(in_channels, out_channels)
+        self.lin2 = torch.nn.Linear(in_channels, out_channels)
 
     def forward(self, x, edge_index, edge_attr):
         """Perform message passing operator
@@ -95,9 +116,9 @@ class MGCNConv(MessagePassing):
             edge_attr: (tensor) local edge embeddings. shape: [E, d]
         """
         # add self-loops to the adjacency matrix
-        edge_index, _ = add_self_loops(edge_index, num_nodes=x.size(0))
-        edge_attr = torch.cat((edge_attr, self.loop_emb.repeat(x.size(0), 1)), dim=0)
-
+        # edge_index, _ = add_self_loops(edge_index, num_nodes=x.size(0))
+        # edge_attr = torch.cat((edge_attr, self.loop_emb.repeat(x.size(0), 1)), dim=0)
+        x = self.lin1(x)
         return self.propagate(edge_index, size=(x.size(0), x.size(0)), x=x, edge_attr=edge_attr)
 
     def message(self, x_j, edge_index, size, edge_attr):
@@ -110,15 +131,9 @@ class MGCNConv(MessagePassing):
             edge_attr: edge embeddings. shape: [E, d]
         """
         # transform node features using edge features
-        x_j = x_j * edge_attr
+        # x_j = x_j + edge_attr
 
-        # normalize node fetures
-        row, col = edge_index
-        deg = degree(row, size[0], dtype=x_j.dtype)
-        deg_inv_sqrt = deg.pow(-0.5)
-        norm = deg_inv_sqrt[row] * deg_inv_sqrt[col]
-
-        return norm.view(-1, 1) * x_j
+        return self.lin2(x_j)
 
     def update(self, aggr_out):
         """ Return new node embeddings, aggr_out has shape [N, out_channels]"""

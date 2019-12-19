@@ -68,8 +68,8 @@ def calc_mrr(entity, relation, model, test_triplets, all_triplets, hits=[]):
         # generate new triplets for scoring
         corrupted_triplets = torch.cat(
             (
-                sub * torch.ones(perturb_entity_ids.size(0), dtype=torch.int32).view(-1, 1),
-                rel * torch.ones(perturb_entity_ids.size(0), dtype=torch.int32).view(-1, 1),
+                sub * torch.ones(perturb_entity_ids.size(0), dtype=torch.int64).view(-1, 1),
+                rel * torch.ones(perturb_entity_ids.size(0), dtype=torch.int64).view(-1, 1),
                 perturb_entity_ids.view(-1, 1)
             ),
             dim=1
@@ -94,8 +94,8 @@ def calc_mrr(entity, relation, model, test_triplets, all_triplets, hits=[]):
         corrupted_triplets = torch.cat(
             (
                 perturb_entity_ids.view(-1, 1),
-                torch.ones(perturb_entity_ids.size(0), dtype=torch.int32).view(-1, 1) * rel,
-                torch.ones(perturb_entity_ids.size(0), dtype=torch.int32).view(-1, 1) * obj,
+                torch.ones(perturb_entity_ids.size(0), dtype=torch.int64).view(-1, 1) * rel,
+                torch.ones(perturb_entity_ids.size(0), dtype=torch.int64).view(-1, 1) * obj,
             ),
             dim=1
         )

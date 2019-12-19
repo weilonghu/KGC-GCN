@@ -66,6 +66,23 @@ def uniform(size, tensor):
         tensor.data.uniform_(-bound, bound)
 
 
+def indexing(table, ids):
+    """Lookup index in 'table' for each id in 'ids'
+    Example:
+        table: [1, 3, 5, 9, 8]
+        ids: [1, 1, 5, 3, 8]
+        return: [0, 0, 2, 1, 4]
+    Args:
+        table: all posible ids
+        ids: need to lookup
+    Return:
+        indices: indices of 'ids' in 'table'
+    """
+    one_hot = (ids.view(-1, 1) == table)
+    indices = (one_hot == True).nonzero()[:, 1]
+    return indices
+
+
 def set_logger(log_path):
     """Set the logger to log info in terminal and file `log_path`.
     In general, it is useful to have a logger so that every output to the terminal is saved

@@ -25,17 +25,24 @@ parser.add_argument('--multi_gpu', default=False, action='store_true',
                     help="Whether to use multiple GPUs if available")
 
 
-def evaluate(model, eval_triplets, all_triplets, params, mark='Eval', verbose=False):
+def evaluate(model, loader, graph, eval_triplets, all_triplets, params, mark='Eval', verbose=False):
     """Evaluate the model on dataset 'data'"""
     # set the model to evaluation mode
     model.eval()
 
+    # compute embeddings for entities
+    entity_embedding = torch.zeros((graph.x.size(0), params.emb_dim))
     with torch.no_grad():
-        start = timeit.default_timer()
-        entity_embedding = model.entity_embedding.weight.data.cpu()
-        relation_embedding = model.relation_embedding.weight.data.cpu()
-        metrics = calc_mrr(entity_embedding, relation_embedding, eval_triplets, all_triplets, hits=[1, 3, 10])
-        logging.info('cost time: {:.3f}s'.format(timeit.default_timer() - start))
+        for data_flow in loader(graph.train_mask):
+            embedding, n_id, _, _ = model(graph.edge_attr.to(params.device),
+                                                      data_flow.to(params.device))
+            entity_embedding[n_id] = embedding.cpu()
+    
+    # calculate mrr
+    start = timeit.default_timer()
+    relation_embedding = model.relation_embedding.weight.data.cpu()
+    metrics = calc_mrr(entity_embedding, relation_embedding, model, eval_triplets, all_triplets, hits=[1, 3, 10])
+    logging.info('cost time: {:.3f}s'.format(timeit.default_timer() - start))
 
     # logging and report
     metrics['measure'] = metrics['mrr']

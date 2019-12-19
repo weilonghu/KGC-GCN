@@ -4,15 +4,18 @@ import argparse
 import logging
 import os
 import random
+import math
 
 import torch
 import torch.nn as nn
 from tqdm import trange
+from torch_geometric.data import NeighborSampler
 
 import utils
 from model import MGCN
 from evaluate import evaluate
 from data_set import DataSet
+from data_set import negative_sampling
 
 
 parser = argparse.ArgumentParser()
@@ -26,30 +29,44 @@ parser.add_argument('--multi_gpu', default=False, action='store_true',
                     help="Whether to use multiple GPUs if available")
 
 
-def train(model, dataset, optimizer, params):
+def train(model, loader, train_data, optimizer, params):
     """Train the model for one epoch"""
     # set the model to training mode
     model.train()
 
     optimizer.zero_grad()
 
-    # compute model output and loss
-    train_data = dataset.build_train_graph()
-    entity_embedding = model(
-        train_data.entity, train_data.edge_index,
-        train_data.edge_type, train_data.edge_ids)
-    loss = model.score_loss(entity_embedding, train_data.samples, train_data.labels) + \
-        params.regularization * model.reg_loss(entity_embedding)
+    # a running average object for loss and acc
+    loss_avg = utils.RunningAverage()
+    acc_avg = utils.RunningAverage()
+    
+    for data_flow in loader(train_data.train_mask):
+        embedding, n_id, e_id, edge_index = model(train_data.edge_attr.to(params.device),
+                                                  data_flow.to(params.device))
+        # construct batch triplets
+        head, tail = edge_index[0], edge_index[1]
+        rel = train_data.edge_attr[e_id][:, 1].to(params.device)
+        # negative sampling for training
+        pos_samples = torch.cat((head.view(-1, 1), rel.view(-1, 1), tail.view(-1, 1)), dim=1)
+        samples, labels = negative_sampling(pos_samples, n_id.size(0), params.negative_rate, params.device)
 
-    if params.n_gpu > 1 and params.multi_gpu:
-        loss = loss.mean()  # mean() to average on multi-gpu
-    loss.backward()
+        loss, acc = model.loss_func(embedding, samples.to(params.device), labels.to(params.device))
 
-    # gradient clipping
-    nn.utils.clip_grad_norm_(
-        parameters=model.parameters(), max_norm=params.clip_grad)
-    optimizer.step()
-    model.zero_grad()
+        if params.n_gpu > 1 and params.multi_gpu:
+            loss = loss.mean()  # mean() to average on multi-gpu
+        loss.backward()
+
+        # gradient clipping
+        nn.utils.clip_grad_norm_(
+            parameters=model.parameters(), max_norm=params.clip_grad)
+        optimizer.step()
+        model.zero_grad()
+
+        # update the average loss
+        loss_avg.update(loss.item())
+        acc_avg.update(acc.item())
+
+    return loss_avg(), acc_avg()
 
 
 def train_and_evaluate(model, dataset, optimizer, params, model_dir, restore_dir):
@@ -67,19 +84,23 @@ def train_and_evaluate(model, dataset, optimizer, params, model_dir, restore_dir
     eval_triplets = dataset.valid_triplets
     all_triplets = dataset.total_triplets()
 
-    # use tqdm for progress bar
-    for epoch in trange(1, (params.epoch_num + 1), desc='Epochs', position=0):
-        # run one epoch
-        # logging.info('Epoch {}/{}'.format(epoch + 1, params.epoch_num))
+    # build graph using training set, create NeighborSampler
+    train_data = dataset.build_train_graph()
+    loader = NeighborSampler(train_data, size=[5, 10], num_hops=1, bipartite=False,
+                             batch_size=params.batch_size, shuffle=True, add_self_loops=False)
 
+    epoches = trange(params.epoch_num)
+    for epoch in epoches:
         # train for one epoch on training set
-        train(model, dataset, optimizer, params)
+        loss, acc = train(model, loader, train_data, optimizer, params)
 
-        if epoch % params.eval_every == 0:
-            val_metrics = evaluate(model, eval_triplets, all_triplets, params, mark='Val')
+        epoches.set_postfix(loss='{:05.3f}'.format(loss), acc='{:05.3f}'.format(acc))
+
+        if (epoch + 1) % params.eval_every == 0:
+            val_metrics = evaluate(model, loader, train_data, eval_triplets, all_triplets, params, mark='Val')
             val_measure = val_metrics['measure']
             improve_measure = val_measure - best_measure
-            if improve_measure > 0:
+            if improve_measure < 0:
                 logging.info('- Found new best measure')
                 best_measure = val_measure
                 state = {'state_dict': model.state_dict(

@@ -24,7 +24,7 @@ class MGCN(torch.nn.Module):
         nn.init.xavier_uniform_(self.entity_embedding.weight.data)
         nn.init.xavier_uniform_(self.relation_embedding.weight.data)
 
-        self.conv1 = MGCNConv(emb_dim, emb_dim)
+        self.conv1 = MGCNConv(emb_dim, emb_dim, num_relations)
 
         self.dropout_ratio = dropout
 
@@ -41,21 +41,13 @@ class MGCN(torch.nn.Module):
             edge_type: relation types of each edge. shape: [E]
             edge_ids: edge indices in triplets file. shape: [E]
         """
-        # block = data_flow[0]
-        # x = self.entity_embedding(x[block.n_id])
-        # edge_index = block.edge_index
-        # edge_ids, edge_types = edge_attr[block.e_id].transpose(0, 1)
-        # edge_attr = self.relation_embedding(edge_types) + self.edge_embedding(edge_ids)
-        # x = self.conv1(x, edge_index, edge_attr)
-        # x = F.relu(self.conv1(x, edge_index, edge_attr))
-        # x = F.dropout(x, p=self.dropout_ratio, training=self.training)
-        # x = self.conv2(x, edge_index, edge_attr)
 
         edge_ids, edge_types = edge_attr[data.e_id].transpose(0, 1)
         edge_attr = self.relation_embedding(edge_types)
 
         x = self.entity_embedding(data.n_id)
-        x = F.relu(self.conv1(x, data.edge_index, edge_attr))
+        x = self.conv1(x, data.edge_index, edge_attr, edge_types)
+        # x = F.relu(self.conv1(x, data.edge_index, edge_attr, edge_types))
         x = F.dropout(x, p=self.dropout_ratio, training=self.training)
 
         return x, data.n_id, data.e_id, data.edge_index
@@ -65,7 +57,7 @@ class MGCN(torch.nn.Module):
         s = embedding[triplets[:, 0]]
         r = self.relation_embedding(triplets[:, 1])
         o = embedding[triplets[:, 2]]
-        score = torch.sum(torch.abs(s + r - o), dim=1)
+        score = torch.sum(torch.abs(s + r - o), dim=1)  # bugs
 
         return score
 
@@ -97,17 +89,19 @@ class MGCNConv(MessagePassing):
         **kwargs (optional): Additional arguments of.
     """
 
-    def __init__(self, in_channels, out_channels, **kwargs):
+    def __init__(self, in_channels, out_channels, num_relations, **kwargs):
         super(MGCNConv, self).__init__(aggr='mean', **kwargs)
 
         self.in_channels = in_channels
         self.out_channels = out_channels
+        self.num_relations = num_relations
 
-        # self.loop_emb = nn.Parameter(torch.Tensor(in_channels))
         self.lin1 = torch.nn.Linear(in_channels, out_channels)
-        self.lin2 = torch.nn.Linear(in_channels, out_channels)
 
-    def forward(self, x, edge_index, edge_attr):
+        self.relation_matrix = nn.Parameter(torch.Tensor(num_relations + 1, in_channels, out_channels))
+        nn.init.xavier_normal_(self.relation_matrix.data)
+
+    def forward(self, x, edge_index, edge_attr, edge_type):
         """Perform message passing operator
 
         Args:
@@ -116,12 +110,12 @@ class MGCNConv(MessagePassing):
             edge_attr: (tensor) local edge embeddings. shape: [E, d]
         """
         # add self-loops to the adjacency matrix
-        # edge_index, _ = add_self_loops(edge_index, num_nodes=x.size(0))
+        edge_index, _ = add_self_loops(edge_index, num_nodes=x.size(0))
         # edge_attr = torch.cat((edge_attr, self.loop_emb.repeat(x.size(0), 1)), dim=0)
-        x = self.lin1(x)
-        return self.propagate(edge_index, size=(x.size(0), x.size(0)), x=x, edge_attr=edge_attr)
+        edge_type = torch.cat((edge_type, torch.ones(x.size(0), dtype=edge_type.dtype, device=edge_type.device) * self.num_relations))
+        return self.propagate(edge_index, size=(x.size(0), x.size(0)), x=x, edge_attr=edge_attr, edge_type=edge_type)
 
-    def message(self, x_j, edge_index, size, edge_attr):
+    def message(self, x_i, x_j, edge_index_i, edge_index_j, size, edge_attr, edge_type):
         """
         Construct messages to node i in analogy to ϕ for each edge in (j, i).
 
@@ -132,8 +126,9 @@ class MGCNConv(MessagePassing):
         """
         # transform node features using edge features
         # x_j = x_j + edge_attr
+        x_j = torch.matmul(x_j.unsqueeze_(dim=1), self.relation_matrix[edge_type])
 
-        return self.lin2(x_j)
+        return x_j.squeeze_(dim=1)
 
     def update(self, aggr_out):
         """ Return new node embeddings, aggr_out has shape [N, out_channels]"""

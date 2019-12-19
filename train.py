@@ -86,8 +86,8 @@ def train_and_evaluate(model, dataset, optimizer, params, model_dir, restore_dir
 
     # build graph using training set, create NeighborSampler
     train_data = dataset.build_train_graph()
-    loader = NeighborSampler(train_data, size=[5, 10], num_hops=1, bipartite=False,
-                             batch_size=params.batch_size, shuffle=True, add_self_loops=False)
+    loader = NeighborSampler(train_data, size=5, num_hops=1, bipartite=False,
+                             batch_size=params.batch_size, shuffle=True, add_self_loops=True)
 
     epoches = trange(params.epoch_num)
     for epoch in epoches:

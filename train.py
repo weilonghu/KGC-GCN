@@ -19,7 +19,7 @@ from data_set import negative_sampling
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--dataset', default='FB15k-237',
+parser.add_argument('--dataset', default='WN18',
                     help="Directory containing the dataset")
 parser.add_argument('--seed', default=2019,
                     help="random seed for initialization")
@@ -34,13 +34,13 @@ def train(model, loader, train_data, optimizer, params):
     # set the model to training mode
     model.train()
 
-    optimizer.zero_grad()
-
     # a running average object for loss and acc
     loss_avg = utils.RunningAverage()
     acc_avg = utils.RunningAverage()
     
     for data_flow in loader(train_data.train_mask):
+        optimizer.zero_grad()
+
         embedding, n_id, e_id, edge_index = model(train_data.edge_attr.to(params.device),
                                                   data_flow.to(params.device))
         # construct batch triplets
@@ -60,7 +60,6 @@ def train(model, loader, train_data, optimizer, params):
         nn.utils.clip_grad_norm_(
             parameters=model.parameters(), max_norm=params.clip_grad)
         optimizer.step()
-        model.zero_grad()
 
         # update the average loss
         loss_avg.update(loss.item())
@@ -86,8 +85,8 @@ def train_and_evaluate(model, dataset, optimizer, params, model_dir, restore_dir
 
     # build graph using training set, create NeighborSampler
     train_data = dataset.build_train_graph()
-    loader = NeighborSampler(train_data, size=5, num_hops=1, bipartite=False,
-                             batch_size=params.batch_size, shuffle=True, add_self_loops=True)
+    loader = NeighborSampler(train_data, size=[1, 25], num_hops=1, bipartite=False,
+                             batch_size=params.batch_size, shuffle=True, add_self_loops=False)
 
     epoches = trange(params.epoch_num)
     for epoch in epoches:
@@ -155,7 +154,7 @@ if __name__ == '__main__':
 
     # prepare model
     model = MGCN(dataset.n_entity, dataset.n_relation, num_edges,
-                 params.emb_dim, params.dropout)
+                 params)
     if params.load_pretrain:
         model.from_pretrained_emb(dataset.pretrained_entity,
                                   dataset.pretrained_relation)

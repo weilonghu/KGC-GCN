@@ -32,16 +32,18 @@ def evaluate(model, loader, graph, eval_triplets, all_triplets, params, mark='Ev
 
     # compute embeddings for entities
     entity_embedding = torch.zeros((graph.x.size(0), params.emb_dim))
+    predicted_entities = []
     with torch.no_grad():
         for data_flow in loader(graph.train_mask):
             embedding, n_id, _, _ = model(graph.edge_attr.to(params.device),
                                                       data_flow.to(params.device))
             entity_embedding[n_id] = embedding.cpu()
+            predicted_entities.extend([id.item() for id in list(n_id)])
+    assert len(set(predicted_entities)) == graph.x.size(0), 'Incompleted prediction'
     
     # calculate mrr
     start = timeit.default_timer()
-    relation_embedding = model.relation_embedding.weight.data.cpu()
-    metrics = calc_mrr(entity_embedding, relation_embedding, model, eval_triplets, all_triplets, hits=[1, 3, 10])
+    metrics = calc_mrr(entity_embedding, model, eval_triplets, all_triplets, device=params.device, hits=[1, 3, 10])
     logging.info('cost time: {:.3f}s'.format(timeit.default_timer() - start))
 
     # logging and report
@@ -88,7 +90,7 @@ if __name__ == '__main__':
 
     # prepare model
     model = MGCN(dataset.n_entity, dataset.num_relations,
-                 params.n_bases, params.dropout)
+                 params)
     utils.load_checkpoint(os.path.join(model_dir, 'last.ckpt'), model)
     model.to(params.device)
 

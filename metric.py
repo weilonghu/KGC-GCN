@@ -1,21 +1,19 @@
-"""Calculate metrics for knowledge graph representation"""
+"""
+Calculate metrics for knowledge graph representation and use multi-processing for accelerating.
+Be care for the termination of the sub-processes. For example, the CTRL+C signal.
+"""
 
 import torch
 import numpy as np
-# import multiprocessing as mp
-
-import os
 from tqdm import tqdm
-import utils
-from data_set import DataSet
 
 
 def score_func(entity, relation, triplets):
     scores = entity[triplets[:, 0].long()] + relation[triplets[:, 1].long()] - entity[triplets[:, 2].long()]
-    return torch.mean(scores, dim=1)
+    return torch.norm(scores, p=1, dim=1)
 
 
-def calc_mrr(entity, relation, model, test_triplets, all_triplets, hits=[]):
+def calc_mrr(entity, model, test_triplets, all_triplets, device, hits=[]):
     """Calculate MRR (filtered) and Hits @ (1, 3, 10)
 
     For each test triplet, the head is removed and replaced by each of the entities of the dictionary in turn.
@@ -29,7 +27,6 @@ def calc_mrr(entity, relation, model, test_triplets, all_triplets, hits=[]):
 
     Args:
         entity: entity embeddings output by our model
-        relation: relation embeddings output by out model
         model: (MGCN) used for score function
         test_triplets: (2-d array) triplets in test set
         all_triplets: (2-d array) triplets in train, valid and test set
@@ -38,14 +35,14 @@ def calc_mrr(entity, relation, model, test_triplets, all_triplets, hits=[]):
     Return:
         metrics: (dict) including mrr and hits@n
     """
-    test_triplets = torch.from_numpy(test_triplets)
-    all_triplets = torch.from_numpy(all_triplets)
+    entity = entity.to(device)
+    test_triplets = torch.from_numpy(test_triplets).long()
+    all_triplets = torch.from_numpy(all_triplets).long()
 
     # ranking results when replace head entity or tail entity
     ranks_s = []
     ranks_o = []
 
-    # def _compute_rank(test_triplets):
     for test_triplet in tqdm(test_triplets):
 
         # Perturb object firstly
@@ -59,8 +56,7 @@ def calc_mrr(entity, relation, model, test_triplets, all_triplets, hits=[]):
 
         # using delete_indices to get all valid tail entities in those triplets
         delete_entity_ids = all_triplets[delete_indices, 2].view(-1).numpy()
-        # perturb_entity_index = np.array(list(set(np.arange(14541)) - set(delete_entity_index)))
-        perturb_entity_ids = np.setdiff1d(np.arange(entity.size(0)), np.unique(delete_entity_ids))
+        perturb_entity_ids = np.setdiff1d(np.arange(entity.size(0), dtype=np.int64), np.unique(delete_entity_ids))
         perturb_entity_ids = torch.from_numpy(perturb_entity_ids)
         # add the current test triplet
         perturb_entity_ids = torch.cat((perturb_entity_ids, obj.view(-1)))
@@ -68,15 +64,16 @@ def calc_mrr(entity, relation, model, test_triplets, all_triplets, hits=[]):
         # generate new triplets for scoring
         corrupted_triplets = torch.cat(
             (
-                sub * torch.ones(perturb_entity_ids.size(0), dtype=torch.int64).view(-1, 1),
-                rel * torch.ones(perturb_entity_ids.size(0), dtype=torch.int64).view(-1, 1),
+                sub * torch.ones_like(perturb_entity_ids).view(-1, 1),
+                rel * torch.ones_like(perturb_entity_ids).view(-1, 1),
                 perturb_entity_ids.view(-1, 1)
             ),
             dim=1
         )
 
-        scores = score_func(entity, relation, corrupted_triplets)
-        rank = torch.argmax(torch.argsort(scores))
+        # scores = score_func(entity, relation, corrupted_triplets)
+        scores = model.score_func(entity, corrupted_triplets.to(device))
+        rank = torch.argmax(torch.argsort(scores.cpu()))
         ranks_o.append(rank)
 
         # Then, perturb subjects
@@ -85,7 +82,7 @@ def calc_mrr(entity, relation, model, test_triplets, all_triplets, hits=[]):
         delete_indices = torch.nonzero(delete_indices == 2).squeeze()
 
         delete_entity_ids = all_triplets[delete_indices, 0].view(-1).numpy()
-        perturb_entity_ids = np.setdiff1d(np.arange(entity.size(0)), np.unique(delete_entity_ids))
+        perturb_entity_ids = np.setdiff1d(np.arange(entity.size(0), dtype=np.int64), np.unique(delete_entity_ids))
         perturb_entity_ids = torch.from_numpy(perturb_entity_ids)
         # add the current test triplet
         perturb_entity_ids = torch.cat((perturb_entity_ids, sub.view(-1)))
@@ -94,14 +91,14 @@ def calc_mrr(entity, relation, model, test_triplets, all_triplets, hits=[]):
         corrupted_triplets = torch.cat(
             (
                 perturb_entity_ids.view(-1, 1),
-                torch.ones(perturb_entity_ids.size(0), dtype=torch.int64).view(-1, 1) * rel,
-                torch.ones(perturb_entity_ids.size(0), dtype=torch.int64).view(-1, 1) * obj,
+                torch.ones_like(perturb_entity_ids).view(-1, 1) * rel,
+                torch.ones_like(perturb_entity_ids).view(-1, 1) * obj,
             ),
             dim=1
         )
 
-        scores = score_func(entity, relation, corrupted_triplets)
-        rank = torch.argmax(torch.argsort(scores))
+        scores = model.score_func(entity, corrupted_triplets.to(device))
+        rank = torch.argmax(torch.argsort(scores.cpu()))
         ranks_s.append(rank)
 
     # begin to compute mrr and hit@n using ranks
@@ -115,27 +112,3 @@ def calc_mrr(entity, relation, model, test_triplets, all_triplets, hits=[]):
         metrics['hits@{}'.format(hit)] = avg_count.item()
 
     return metrics
-
-
-if __name__ == '__main__':
-    # directory containing saved model
-    model_dir = os.path.join('experiments', 'WN18')
-    # load the parameters from json file
-    json_path = os.path.join(model_dir, 'params.json')
-    assert os.path.isfile(
-        json_path), 'No json configuration file found at {}'.format(json_path)
-    params = utils.Params(json_path)
-
-    params.device = torch.device(
-        'cuda' if torch.cuda.is_available() else 'cpu')
-
-    dataset = DataSet('WN18', params)
-    # evaluation triplet
-    eval_triplets = dataset.test_triplets
-    all_triplets = dataset.total_triplets()
-
-    metrics = calc_mrr(dataset.pretrained_entity, dataset.pretrained_relation, None, eval_triplets, all_triplets, hits=[1, 3, 10])
-
-    metrics_str = "; ".join("{}: {:05.2f}".format(k, v)
-                            for k, v in metrics.items())
-    print("- {} metrics: ".format('test') + metrics_str)

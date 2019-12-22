@@ -1,10 +1,13 @@
 """Interface used for dataset and batch-wise training"""
 
+import os
+
 import torch
 import numpy as np
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch_geometric.data import Data
+from torch_geometric.data import NeighborSampler
 from torch_scatter import scatter_add
 
 from data_set import DataSet
@@ -19,7 +22,7 @@ class DataManager(object):
         self.num_entity = self.data_set.num_entity
         self.num_relation = self.data_set.num_relation
 
-        self.device = params.device
+        self.num_worker = params.num_worker
 
     def all_triplets(self):
         """Get all triplets for evaluation"""
@@ -38,7 +41,7 @@ class DataManager(object):
         Args:
             batch: (numpy.ndarray)
         Return:
-            pytorch_geometric.data.Data
+            torch_geometric.data.Data
         """
         src, rel, dst = np.array(batch).transpose()
         uniq_entity, edges = np.unique((src, dst), return_inverse=True)
@@ -59,29 +62,69 @@ class DataManager(object):
         rel = torch.tensor(rel[graph_split_ids], dtype = torch.long).contiguous()
 
         # Create bi-directional graph
-        src, dst = torch.cat((src, dst)), torch.cat((dst, src))
-        rel = torch.cat((rel, rel + self.num_relation))
+        # src, dst = torch.cat((src, dst)), torch.cat((dst, src))
+        # rel = torch.cat((rel, rel + self.num_relation))
 
         edge_index = torch.stack((src, dst))
-        edge_type = rel
+        edge_attr = rel
 
-        data = Data(edge_index = edge_index)
+        data = Data(edge_index = edge_index, edge_attr=edge_attr)
         data.entity = torch.from_numpy(uniq_entity)
-        data.edge_type = edge_type
-        data.edge_norm = self._edge_normal(edge_type, edge_index, len(uniq_entity), self.num_relation)
         data.samples = torch.from_numpy(samples)
         data.labels = torch.from_numpy(labels)
 
         return data
 
-    def data_iterator(self, batch_size, shuffle=True):
+    def data_iterator(self, batch_size, shuffle=True, drop_last=True):
         """Create a pytorch DataLoader object"""
+
+        # zero worker when remote development
+        method = os.environ.get('MULTIPROCESS_METHOD', None)
+        num_workers = self.num_worker
         return DataLoader(self.data_set,
                           batch_size=batch_size,
                           shuffle=shuffle,
                           collate_fn=self._self_collate_fn,
-                          num_workers=4,
-                          drop_last=False)
+                          num_workers=num_workers,
+                          drop_last=drop_last)
+
+    def neighbor_sampler(self, batch_size, size=1, shuffle=True, num_hops=1, drop_last=True):
+        """The neighbor sampler from the “Inductive Representation Learning on Large Graphs” paper implemented by torch_geometric
+
+        Args:
+            size: (int or [int]) The number of neighbors to sample (for each layer)
+            num_hops: (int) The number of layers to sample
+        Return:
+            torch_geometric.data.Data object.
+        """
+        train_data = self.build_test_graph()
+        loader = NeighborSampler(train_data,
+                                 size=size,
+                                 num_hops=num_hops,
+                                 bipartite=False,
+                                 batch_size=batch_size,
+                                 shuffle=shuffle,
+                                 add_self_loops=False,
+                                 drop_last=drop_last)
+        # create a generator for negative sampling and consistent interface
+        def generator():
+            for data in loader():
+                n_id, e_id, edge_index = data.n_id, data.e_id, data.edge_index
+                # construct batch triplets
+                head, tail = edge_index[0], edge_index[1]
+                rel = train_data.edge_attr[e_id]
+                # negtive sampling
+                pos_samples = torch.cat((head.view(-1, 1), rel.view(-1, 1), tail.view(-1, 1)), dim=1)
+                samples, labels = self._negative_sampling(pos_samples, n_id.size(0), self.negative_rate)
+
+                n_data = Data(edge_index = edge_index, edge_attr=rel)
+                n_data.entity = n_id
+                n_data.samples = torch.from_numpy(samples)
+                n_data.labels = torch.from_numpy(labels)
+
+                yield n_data
+
+        return generator()
 
     """
     Functions used to build graph
@@ -131,15 +174,13 @@ class DataManager(object):
     def build_test_graph(self):
         src, rel, dst = self.fetch_triplets('train').transpose(0, 1)
 
-        src, dst = torch.cat((src, dst)), torch.cat((dst, src))
-        rel = torch.cat((rel, rel + self.num_relation))
+        # src, dst = torch.cat((src, dst)), torch.cat((dst, src))
+        # rel = torch.cat((rel, rel + self.num_relation))
 
         edge_index = torch.stack((src, dst))
-        edge_type = rel
+        edge_attr = rel
 
-        data = Data(edge_index = edge_index)
+        data = Data(edge_index = edge_index, edge_attr=edge_attr)
         data.entity = torch.from_numpy(np.arange(self.num_entity))
-        data.edge_type = edge_type
-        data.edge_norm = self._edge_normal(edge_type, edge_index, self.num_entity, self.num_relation)
 
         return data

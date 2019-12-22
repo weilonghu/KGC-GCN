@@ -10,13 +10,17 @@
     "patience_num": 10,
 
     "regularization": 1e-2,
-    "emb_dim": 50,
-    "batch_size": 40000,
+    "emb_dim": 100,
+    "batch_size": 20000,
     "negative_rate": 1,
     "dropout": 0.2,
     "margin": 1.0,
     "norm": 1,
-    "split_size": 0.9,
+    "split_size": 0.7,
+    "num_worker": 0,
+
+    "sampler_size": "5 10",
+    "sampler_num_hops": 1,
 
     "load_pretrain": false
 }

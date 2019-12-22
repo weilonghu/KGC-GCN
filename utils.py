@@ -61,6 +61,15 @@ class RunningAverage():
         return self.total / float(self.steps)
 
 
+class MakeIter(object):
+    """Make a generator to a iterator"""
+    def __init__(self, generator_func, **kwargs):
+        self.generator_func = generator_func
+        self.kwargs = kwargs
+    def __iter__(self):
+        return self.generator_func(**self.kwargs)
+
+
 def uniform(size, tensor):
     bound = 1.0 / math.sqrt(size)
     if tensor is not None:

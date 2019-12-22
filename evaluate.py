@@ -43,7 +43,7 @@ def evaluate(model, test_graph, eval_triplets, all_triplets, params, mark='Eval'
     metrics['measure'] = metrics['mrr']
     metrics_str = "; ".join("{}: {:05.2f}".format(k, v)
                             for k, v in metrics.items())
-    logging.info("- {} metrics: ".format(mark) + metrics_str)
+    logging.info("\n- {} metrics: {}\n".format(mark, metrics_str))
 
     return metrics
 

@@ -25,6 +25,8 @@ parser.add_argument('--restore_dir', default=None,
                     help="Optional, name of the directory containing weights to reload before training, e.g., 'experiments'")
 parser.add_argument('--multi_gpu', default=False, action='store_true',
                     help="Whether to use multiple GPUs if available")
+parser.add_argument('--neighbor_sampler', default=False, action='store_true',
+                    help="Whether to use torch_geometric.data.NeighborSampler")
 
 
 def train(model, loader, optimizer, params):
@@ -39,9 +41,7 @@ def train(model, loader, optimizer, params):
     acc_avg = utils.RunningAverage()
     
     for data in loader:
-        data.to(params.device)
-        entity_embedding = model(data.entity, data.edge_index, data.edge_type, data.edge_norm)
-
+        entity_embedding = model(data.to(params.device))
         loss, acc = model.loss_func(entity_embedding, data.samples, data.labels)
 
         if params.n_gpu > 1 and params.multi_gpu:
@@ -77,7 +77,14 @@ def train_and_evaluate(model, data_manager, optimizer, params, model_dir, restor
     test_graph = data_manager.build_test_graph()
 
     # build graph using training set
-    loader = data_manager.data_iterator(batch_size=params.batch_size, shuffle=True)
+    if args.neighbor_sampler is False:
+        loader = data_manager.data_iterator(batch_size=params.batch_size, shuffle=True)
+    else:
+        neighbor_sampler_size = [int(size) for size in params.sampler_size.split()]
+        loader = data_manager.neighbor_sampler(batch_size=params.batch_size,
+                                               shuffle=True,
+                                               size=neighbor_sampler_size,
+                                               num_hops=params.num_hops)
 
     epoches = trange(params.epoch_num)
     for epoch in epoches:
@@ -90,7 +97,7 @@ def train_and_evaluate(model, data_manager, optimizer, params, model_dir, restor
             val_metrics = evaluate(model, test_graph, eval_triplets, all_triplets, params, mark='Val')
             val_measure = val_metrics['measure']
             improve_measure = val_measure - best_measure
-            if improve_measure < 0:
+            if improve_measure > 0:
                 logging.info('- Found new best measure')
                 best_measure = val_measure
                 state = {'state_dict': model.state_dict(

@@ -9,13 +9,11 @@ import math
 import torch
 import torch.nn as nn
 from tqdm import trange
-from torch_geometric.data import NeighborSampler
 
 import utils
 from model import MGCN
 from evaluate import evaluate
-from data_set import DataSet
-from data_set import negative_sampling
+from data_manager import DataManager
 
 
 parser = argparse.ArgumentParser()
@@ -29,28 +27,22 @@ parser.add_argument('--multi_gpu', default=False, action='store_true',
                     help="Whether to use multiple GPUs if available")
 
 
-def train(model, loader, train_data, optimizer, params):
+def train(model, loader, optimizer, params):
     """Train the model for one epoch"""
     # set the model to training mode
     model.train()
+
+    optimizer.zero_grad()
 
     # a running average object for loss and acc
     loss_avg = utils.RunningAverage()
     acc_avg = utils.RunningAverage()
     
-    for data_flow in loader(train_data.train_mask):
-        optimizer.zero_grad()
+    for data in loader:
+        data.to(params.device)
+        entity_embedding = model(data.entity, data.edge_index, data.edge_type, data.edge_norm)
 
-        embedding, n_id, e_id, edge_index = model(train_data.edge_attr.to(params.device),
-                                                  data_flow.to(params.device))
-        # construct batch triplets
-        head, tail = edge_index[0], edge_index[1]
-        rel = train_data.edge_attr[e_id][:, 1].to(params.device)
-        # negative sampling for training
-        pos_samples = torch.cat((head.view(-1, 1), rel.view(-1, 1), tail.view(-1, 1)), dim=1)
-        samples, labels = negative_sampling(pos_samples, n_id.size(0), params.negative_rate, params.device)
-
-        loss, acc = model.loss_func(embedding, samples.to(params.device), labels.to(params.device))
+        loss, acc = model.loss_func(entity_embedding, data.samples, data.labels)
 
         if params.n_gpu > 1 and params.multi_gpu:
             loss = loss.mean()  # mean() to average on multi-gpu
@@ -68,7 +60,7 @@ def train(model, loader, train_data, optimizer, params):
     return loss_avg(), acc_avg()
 
 
-def train_and_evaluate(model, dataset, optimizer, params, model_dir, restore_dir):
+def train_and_evaluate(model, data_manager, optimizer, params, model_dir, restore_dir):
     """Train the model and evaluate every epoch"""
     # reload weights from restore_dir if specified
     if restore_dir is not None:
@@ -79,24 +71,23 @@ def train_and_evaluate(model, dataset, optimizer, params, model_dir, restore_dir
     # early stopping
     patience_counter = 0
 
-    # evaluation triplet
-    eval_triplets = dataset.valid_triplets
-    all_triplets = dataset.total_triplets()
+    # evaluation triplet and graph
+    eval_triplets = data_manager.fetch_triplets('val')
+    all_triplets = data_manager.all_triplets()
+    test_graph = data_manager.build_test_graph()
 
-    # build graph using training set, create NeighborSampler
-    train_data = dataset.build_train_graph()
-    loader = NeighborSampler(train_data, size=[1, 25], num_hops=1, bipartite=False,
-                             batch_size=params.batch_size, shuffle=True, add_self_loops=False)
+    # build graph using training set
+    loader = data_manager.data_iterator(batch_size=params.batch_size, shuffle=True)
 
     epoches = trange(params.epoch_num)
     for epoch in epoches:
         # train for one epoch on training set
-        loss, acc = train(model, loader, train_data, optimizer, params)
+        loss, acc = train(model, loader, optimizer, params)
 
         epoches.set_postfix(loss='{:05.3f}'.format(loss), acc='{:05.3f}'.format(acc))
 
         if (epoch + 1) % params.eval_every == 0:
-            val_metrics = evaluate(model, loader, train_data, eval_triplets, all_triplets, params, mark='Val')
+            val_metrics = evaluate(model, test_graph, eval_triplets, all_triplets, params, mark='Val')
             val_measure = val_metrics['measure']
             improve_measure = val_measure - best_measure
             if improve_measure < 0:
@@ -129,6 +120,9 @@ if __name__ == '__main__':
         json_path), 'No json configuration file found at {}'.format(json_path)
     params = utils.Params(json_path)
 
+    # set multiprocessing start method
+    utils.multiprocess_setting()
+
     # use GPUs if available
     params.device = torch.device(
         'cuda' if torch.cuda.is_available() else 'cpu')
@@ -148,13 +142,10 @@ if __name__ == '__main__':
 
     # create dataset and normalize
     logging.info('Loading the dataset...')
-
-    dataset = DataSet(args.dataset, params)
-    num_edges = dataset.train_triplets.shape[0]
+    data_manager = DataManager(args.dataset, params)
 
     # prepare model
-    model = MGCN(dataset.n_entity, dataset.n_relation, num_edges,
-                 params)
+    model = MGCN(data_manager.num_entity, data_manager.num_relation, params)
     if params.load_pretrain:
         model.from_pretrained_emb(dataset.pretrained_entity,
                                   dataset.pretrained_relation)
@@ -169,5 +160,5 @@ if __name__ == '__main__':
 
     # train and evaluate the model
     logging.info('Starting training for {} epoch(s)'.format(params.epoch_num))
-    train_and_evaluate(model, dataset, optimizer,
+    train_and_evaluate(model, data_manager, optimizer,
                        params, model_dir, args.restore_dir)

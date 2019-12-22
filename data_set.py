@@ -1,104 +1,101 @@
-"""Build dataset for graph convolutinal networks"""
+"""
+Knowledge Graph Dataset, e.g. WN18, FB15k and FB15k-237.
+The dataset contains following files:
+    -- entity2id.txt: two columns, one for entity symbol, one for entity id
+    -- relation2id.txt: two columns, one for relation symbol, one for relation id
+    -- train.txt: three columns, head entity, tail entity and relation
+    -- valid.txt: same as 'train.txt'
+    -- test.txt: same as 'train.txt'
+    -- entity2vec.txt: (optional), pretrained entity embeddings
+    -- relation2vec.txt: (optional) pretrained relation embeddings
+All columns are splited by '\t'.
+
+For clarification, all loaded data are numpy.ndarray instead of torch.Tensor.
+"""
 
 import os
 import logging
 
 import numpy as np
-import torch
+from torch.utils import data
 from torch_geometric.data import Data
 
 
-class DataSet:
-    def __init__(self, dataset, params):
-        self.dataset = dataset
-        self.negative_rate = params.negative_rate
-        self.device = params.device
-        self.emb_dim = params.emb_dim
+class DataSet(data.Dataset):
+    """Knowledge graph datast
 
-        # load pretrained embeddings if need
-        if params.load_pretrain:
-            self.pretrained_entity = self._load_pretrained_emb(
-                os.path.join('data', self.dataset, 'entity2vec.txt')
-            )
+    Attributes:
+        entity2id: (dict) map entity to id
+        relation2id: (dict) map relation to id
+        train_triplets: (numpy.ndarray) triplets in training set
+        valid_triplets: (numpy.ndarray) triplets in validation set
+        test_triplets: (numpy.ndarray) triplets in test set
+        pretrain_entity: (numpy.ndarray) pretrained entity embeddings, optional
+        pretrain_relation: (numpy.ndarray) pretrained relation embeddings, optional
+    """
 
-            self.pretrained_relation = self._load_pretrained_emb(
-                os.path.join('data', self.dataset, 'relation2vec.txt')
-            )
+    def __init__(self, dataset):
+        self.data_dir = os.path.join('data', dataset)
 
         # whether dataset exists
-        assert os.path.exists(os.path.join(
-            'data', self.dataset)), 'Dataset {} not found'.format(self.dataset)
+        assert os.path.exists(self.data_dir), 'Dataset {} not found'.format(self.dataset)
 
-        # the following operations only run once
         # load entites and relations
-        self.entity2id = self._load_entries(self.dataset)
-        self.relation2id = self._load_entries(self.dataset, load_entities=False)
+        self.entity2id = self._load_entries(os.path.join(self.data_dir, 'entity2id.txt'))
+        self.relation2id = self._load_entries(os.path.join(self.data_dir, 'relation2id.txt'))
 
-        self.n_entity = len(self.entity2id)
-        self.n_relation = len(self.relation2id)
+        # load triplets
+        self.triplets = {
+            'train': self._load_triplets(self.data_dir, 'train'),
+            'val': self._load_triplets(self.data_dir, 'valid'),
+            'test': self._load_triplets(self.data_dir, 'test')
+        }
 
-        # load traiplets
-        self.train_triplets, self.valid_triplets, self.test_triplets = self._load_data()
+        # load pretrained embeddings if exist
+        if os.path.exists(os.path.join(self.data_dir, 'entity2vec.txt')):
+            self.pretrain_entity = self._load_pretrained_emb(os.path.join(self.data_dir, 'entity2vec.txt'))
 
-    def total_triplets(self):
-        """Get all triplets for evaluation"""
-        return np.concatenate((
-            self.train_triplets, self.valid_triplets, self.test_triplets
-        ))
+        if os.path.exists(os.path.join(self.data_dir, 'relation2vec.txt')):
+            self.pretrain_relation = self._load_pretrained_emb(os.path.join(self.data_dir, 'relation2vec.txt'))
+        
+        self.num_entity = len(self.entity2id)
+        self.num_relation = len(self.relation2id)
 
-    def _load_data(self):
-        """Load training set, valid set and test set from files
-        because of the 'filtering' setting in evaluation
-        """
-        # load triplets for training set, valid set and test set
-        train_triplets = self._load_triplets(self.dataset, 'train')
-        valid_triplets = self._load_triplets(self.dataset, 'valid')
-        test_triplets = self._load_triplets(self.dataset, 'test')
+        # report the dataset
+        logging.info('num_entities: {}'.format(self.num_entity))
+        logging.info('num_relations: {}'.format(self.num_relation))
+        logging.info('num_train_triplets: {}'.format(self.triplets['train'].shape[0]))
+        logging.info('num_valid_triplets: {}'.format(self.triplets['val'].shape[0]))
+        logging.info('num_test_triplets: {}'.format(self.triplets['test'].shape[0]))
 
-        return train_triplets, valid_triplets, test_triplets
+    def _load_entries(self, filepath):
+        """Load entities or relations from file, i.e. entity2id.txt or relation2id.txt"""
 
-    def _load_entries(self, dataset, load_entities=True):
-        """Load entities or relations from file, i.e. entity2id.txt or relation2id.txt
-
-        Args:
-            dataset: (string) dataset name
-            load_entites: (bool) whether load entities or relations
-        Return:
-            entries2idx: (dict) map each entry to a number
-        """
         entries = {}
-        entry_file = 'entity2id.txt' if load_entities else 'relation2id.txt'
-        with open(os.path.join('data', dataset, entry_file), 'r') as f:
-            for line in f.readlines():
+        with open(filepath, 'r') as f:
+            for line in f:
                 entry, eid = line.strip().split()
                 entries[entry] = int(eid)
 
-        # logging
-        entry_name = 'entities' if load_entities else 'relations'
-        logging.info('Load {} {} from file'.format(len(entries), entry_name))
-
         return entries
 
-    def _load_triplets(self, dataset, data_type):
-        """Load triplets from train.txt, valid.txt or test.txt
+    def _load_triplets(self, data_dir, data_type):
+        """Load triplets from train.txt, valid.txt or test.txt according to 'data_type' argument
 
         Args:
-            dataset: (string) dataset name
+            data_dir: (string) directory contain dataset
             data_type: (string)  'train', 'valid' or 'test'
         Return:
-            triplets: (list) [(h, r, t),...]
+            numpy.ndarray. shape=[num_triplets, 3]
         """
         assert data_type in ['train', 'valid',
                              'test'], 'Invalid data type when loading triplets'
 
         triplets = []
-        with open(os.path.join('data', dataset, data_type + '.txt'), 'r') as f:
-            for line in f.readlines():
+        with open(os.path.join(data_dir, data_type + '.txt'), 'r') as f:
+            for line in f:
                 head, tail, relation = line.strip().split()
                 triplets.append((self.entity2id[head], self.relation2id[relation], self.entity2id[tail]))
-
-        logging.info('Found {} triplets in {}.txt from dataset {}'.format(
-            len(triplets), data_type, dataset))
 
         return np.array(triplets)
 
@@ -109,81 +106,16 @@ class DataSet:
             for line in f:
                 emb = [float(n) for n in line.strip().split()]
                 embeddings.append(emb)
-        return torch.from_numpy(np.array(embeddings))
+        return np.array(embeddings)
 
-    def _negative_sampling(self, pos_samples, num_entity, negative_rate):
-        """Sample negative triplets for training
+    def total_triplets(self):
+        """Concatenate all triplets from training set, valid set and test set"""
+        return np.concatenate((
+            self.triplets['train'], self.triplets['val'], self.triplets['test']
+        ))
 
-        Args:
-            pos_sample: positive samples
-            num_entity: (int) the number of entities
-            negative_rate: (int) the proportion of negative samples
-        Return:
-            samples: (array) samples including positive and negative samples
-            labels: (array) labels whose values in [0, 1]
-        """
-        size = len(pos_samples)
-        # genrate labels
-        labels = np.zeros(size * (negative_rate + 1), dtype=np.float)
-        labels[: size] = 1  # labels of positive samples
+    def __len__(self):
+        return self.triplets['train'].shape[0]
 
-        # sample negative samples
-        neg_samples = np.tile(pos_samples, (negative_rate, 1))
-        values = np.random.choice(num_entity, size=size * negative_rate)
-        choices = np.random.uniform(size=size * negative_rate)
-        subj, obj = choices > 0.5, choices <= 0.5
-        neg_samples[subj, 0] = values[subj]
-        neg_samples[obj, 2] = values[obj]
-
-        return np.concatenate((pos_samples, neg_samples)), labels
-
-    def build_train_graph(self):
-        """Build graph using training set
-
-        Attributes:
-            edge_index: node indexes of edges, shape: [2, E]
-            edge_attr: edge attributes, including edge id and edge type, shape: [E, 2]
-        """
-        src, rel, dst = self.train_triplets.transpose()
-        src, rel, dst = torch.from_numpy(src), torch.from_numpy(rel), torch.from_numpy(dst)
-
-        edge_index = torch.stack((src, dst))
-        edge_attr = torch.cat((torch.arange(edge_index.size(1)).view(1, -1), rel.view(1, -1)), dim=0).transpose(0,1)
-        data = Data(edge_index=edge_index, edge_attr=edge_attr)
-
-        # add entity ids and mask
-        data.x = torch.arange(self.n_entity)
-        data.train_mask = torch.ones(self.n_entity, dtype=torch.bool)
-
-        return data
-
-
-def negative_sampling(pos_samples, num_entity, negative_rate, device):
-        """Sample negative triplets for training
-
-        Args:
-            pos_sample: positive samples
-            num_entity: (int) the number of entities
-            negative_rate: (int) the proportion of negative samples
-        Return:
-            samples: (array) samples including positive and negative samples
-            labels: (array) labels whose values in [0, 1]
-        """
-        size = len(pos_samples)
-        # genrate labels
-        labels = torch.zeros(size * (negative_rate + 1), dtype=torch.float).to(device)
-        labels[: size] = 1  # labels of positive samples
-
-        # sample negative samples
-        neg_samples = pos_samples.repeat(negative_rate, 1)
-        values = torch.zeros(size * negative_rate, dtype=torch.int64).random_(0, num_entity)
-        choices = torch.zeros(size * negative_rate).uniform_(0, 1)
-        values = values.to(device)
-        choices = choices.to(device)
-        subj, obj = choices > 0.5, choices <= 0.5
-        # subj, obj = subj.nonzero().view(-1), obj.nonzero().view(-1)
-        neg_samples[subj, 0] = values[subj]
-        neg_samples[obj, 2] = values[obj]
-
-        samples = torch.cat((pos_samples, neg_samples), dim=0)
-        return samples, labels
+    def __getitem__(self, index):
+        return self.triplets['train'][index]

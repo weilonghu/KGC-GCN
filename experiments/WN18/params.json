@@ -1,21 +1,22 @@
 {
     "learning_rate": 1e-2,
-    "weight_decay": 0.01,
+    "weight_decay": 0,
     "clip_grad": 1.0,
 
     "epoch_num": 10000,
     "min_epoch_num": 1000,
-    "eval_every": 1,
+    "eval_every": 500,
     "patience": 0.02,
     "patience_num": 10,
 
     "regularization": 1e-2,
     "emb_dim": 50,
-    "batch_size": 1000,
+    "batch_size": 40000,
     "negative_rate": 1,
     "dropout": 0.2,
     "margin": 1.0,
     "norm": 1,
+    "split_size": 0.9,
 
-    "load_pretrain": true
+    "load_pretrain": false
 }

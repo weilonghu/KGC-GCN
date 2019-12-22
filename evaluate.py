@@ -4,7 +4,6 @@ import argparse
 import random
 import logging
 import os
-import timeit
 
 import torch
 
@@ -25,26 +24,20 @@ parser.add_argument('--multi_gpu', default=False, action='store_true',
                     help="Whether to use multiple GPUs if available")
 
 
-def evaluate(model, loader, graph, eval_triplets, all_triplets, params, mark='Eval', verbose=False):
+def evaluate(model, test_graph, eval_triplets, all_triplets, params, mark='Eval', verbose=False):
     """Evaluate the model on dataset 'data'"""
     # set the model to evaluation mode
     model.eval()
+    model.cpu()
 
     # compute embeddings for entities
-    entity_embedding = torch.zeros((graph.x.size(0), params.emb_dim))
-    predicted_entities = []
     with torch.no_grad():
-        for data_flow in loader(graph.train_mask):
-            embedding, n_id, _, _ = model(graph.edge_attr.to(params.device),
-                                                      data_flow.to(params.device))
-            entity_embedding[n_id] = embedding.cpu()
-            predicted_entities.extend([id.item() for id in list(n_id)])
-    assert len(set(predicted_entities)) == graph.x.size(0), 'Incompleted prediction'
-    
-    # calculate mrr
-    start = timeit.default_timer()
-    metrics = calc_mrr(entity_embedding, model, eval_triplets, all_triplets, device=params.device, hits=[1, 3, 10])
-    logging.info('cost time: {:.3f}s'.format(timeit.default_timer() - start))
+        entity_embedding = model(test_graph.entity, test_graph.edge_index, test_graph.edge_type, test_graph.edge_norm)
+        relation_embedding = model.relation_embedding.data.cpu()
+        # calculate mrr
+        metrics = calc_mrr(entity_embedding, relation_embedding, eval_triplets, all_triplets, hits=[1, 3, 10])
+
+    model.to(params.device)
 
     # logging and report
     metrics['measure'] = metrics['mrr']
@@ -64,6 +57,9 @@ if __name__ == '__main__':
     assert os.path.isfile(
         json_path), 'No json configuration file found at {}'.format(json_path)
     params = utils.Params(json_path)
+
+    # set multiprocessing start method
+    utils.multiprocess_setting()
 
     # use GPUs if available
     params.device = torch.device(

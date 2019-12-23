@@ -164,6 +164,7 @@ if __name__ == '__main__':
     # prepare optimizer
     optimizer = torch.optim.Adam(
         model.parameters(), lr=params.learning_rate, weight_decay=params.weight_decay)
+    # optimizer = torch.optim.SGD(model.parameters(), lr=params.learning_rate, momentum=0.3)
 
     # train and evaluate the model
     logging.info('Starting training for {} epoch(s)'.format(params.epoch_num))

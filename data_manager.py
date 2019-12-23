@@ -62,8 +62,8 @@ class DataManager(object):
         rel = torch.tensor(rel[graph_split_ids], dtype = torch.long).contiguous()
 
         # Create bi-directional graph
-        # src, dst = torch.cat((src, dst)), torch.cat((dst, src))
-        # rel = torch.cat((rel, rel + self.num_relation))
+        src, dst = torch.cat((src, dst)), torch.cat((dst, src))
+        rel = torch.cat((rel, rel + self.num_relation))
 
         edge_index = torch.stack((src, dst))
         edge_attr = rel
@@ -174,8 +174,9 @@ class DataManager(object):
     def build_test_graph(self):
         src, rel, dst = self.fetch_triplets('train').transpose(0, 1)
 
-        # src, dst = torch.cat((src, dst)), torch.cat((dst, src))
-        # rel = torch.cat((rel, rel + self.num_relation))
+        # Create bi-directional graph
+        src, dst = torch.cat((src, dst)), torch.cat((dst, src))
+        rel = torch.cat((rel, rel + self.num_relation))
 
         edge_index = torch.stack((src, dst))
         edge_attr = rel

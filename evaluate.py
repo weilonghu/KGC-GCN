@@ -32,7 +32,7 @@ def evaluate(model, test_graph, eval_triplets, all_triplets, params, mark='Eval'
 
     # compute embeddings for entities
     with torch.no_grad():
-        entity_embedding = model(test_graph.entity, test_graph.edge_index, test_graph.edge_type, test_graph.edge_norm)
+        entity_embedding = model(test_graph)
         relation_embedding = model.relation_embedding.data.cpu()
         # calculate mrr
         metrics = calc_mrr(entity_embedding, relation_embedding, eval_triplets, all_triplets, hits=[1, 3, 10])

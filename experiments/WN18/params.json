@@ -1,5 +1,5 @@
 {
-    "learning_rate": 1e-2,
+    "learning_rate": 0.01,
     "weight_decay": 0,
     "clip_grad": 1.0,
 
@@ -10,8 +10,8 @@
     "patience_num": 10,
 
     "regularization": 1e-2,
-    "emb_dim": 100,
-    "batch_size": 20000,
+    "emb_dim": 50,
+    "batch_size": 40000,
     "negative_rate": 1,
     "dropout": 0.2,
     "margin": 1.0,

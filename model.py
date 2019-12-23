@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn.conv import MessagePassing
-from torch_geometric.utils import add_self_loops, degree
+from torch_geometric.utils import add_self_loops, remove_self_loops, softmax
 
 from utils import uniform
 
@@ -27,23 +27,19 @@ class MGCN(torch.nn.Module):
         self.entity_embedding = nn.Embedding(num_entities, self.emb_dim)
         self.relation_embedding = nn.Parameter(torch.Tensor(num_relations, self.emb_dim))
 
-        self.conv1 = MGCNConv(self.emb_dim, self.emb_dim, num_relations)
-        self.conv2 = MGCNConv(self.emb_dim, self.emb_dim, num_relations)
+        self.conv1 = MGCNConv(self.emb_dim, self.emb_dim, 2 * num_relations, heads=4)
+        self.conv2 = MGCNConv(self.emb_dim * 4, self.emb_dim * 2, 2 * num_relations, heads=2)
+        self.conv3 = MGCNConv(self.emb_dim * 4, self.emb_dim, 2 * num_relations, heads=1)
 
         # self.critetion = nn.MarginRankingLoss(margin=params.margin, reduction='mean')
 
-        self._init_embedding()
+        self.reset_parameter()
 
-    def _init_embedding(self):
+    def reset_parameter(self):
         """Initialize embeddings of model with the way used in transE"""
         # uniform_range = 6 / math.sqrt(self.emb_dim)
         # self.entity_embedding.weight.data.uniform_(-uniform_range, uniform_range)
         nn.init.xavier_uniform_(self.relation_embedding, gain=nn.init.calculate_gain('relu'))
-
-    def from_pretrained_emb(self, pretrained_entity, pretrained_relation):
-        """Initialize entity and relation embeddings using pretrained embeddings"""
-        self.entity_embedding.from_pretrained(pretrained_entity)
-        self.relation_embedding.from_pretrained(pretrained_relation)
 
     def forward(self, data):
         """Encode entity in graph 'data' using graph convolutional network
@@ -57,9 +53,9 @@ class MGCN(torch.nn.Module):
 
         x = self.entity_embedding(entity)
         x = self.conv1(x, edge_index, edge_attr)
-        x = self.conv1(x, edge_index, edge_attr)
-        x = F.dropout(x, p = self.dropout_ratio, training = self.training)
         x = self.conv2(x, edge_index, edge_attr)
+        x = F.dropout(x, p = self.dropout_ratio, training = self.training)
+        x = self.conv3(x, edge_index, edge_attr)
 
         return x
 
@@ -97,7 +93,7 @@ class MGCN(torch.nn.Module):
 
         # compute cross-entropy loss
         loss = F.binary_cross_entropy_with_logits(scores, labels)
-        loss += self.reg_loss(embedding)
+        # loss += self.reg_loss(embedding)
 
         # compute accuracy
         logits = torch.sigmoid(scores)
@@ -117,17 +113,34 @@ class MGCNConv(MessagePassing):
         **kwargs (optional): Additional arguments of.
     """
 
-    def __init__(self, in_channels, out_channels, num_relation, **kwargs):
-        super(MGCNConv, self).__init__(aggr='mean', **kwargs)
+    def __init__(self, in_channels, out_channels, num_relation, heads=1, concat=True,
+                 negative_slope=0.2, dropout=0, bias=True, **kwargs):
+        super(MGCNConv, self).__init__(aggr='add', **kwargs)
 
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.num_relation = num_relation
+        self.heads = heads
+        self.concat = concat
+        self.negative_slope = negative_slope
+        self.dropout = dropout
 
-        self.lin1 = torch.nn.Linear(in_channels, out_channels)
+        self.weight = nn.Parameter(torch.Tensor(in_channels, heads * out_channels))
+        self.att = nn.Parameter(torch.Tensor(num_relation + 1, heads, 2 * out_channels))
 
-        self.relation_matrix = nn.Parameter(torch.Tensor(num_relation + 1, in_channels, out_channels))
-        uniform(in_channels, self.relation_matrix)
+        if bias and concat:
+            self.bias = nn.Parameter(torch.Tensor(heads * out_channels))
+        elif bias and not concat:
+            self.bias = nn.Parameter(torch.Tensor(out_channels))
+        else:
+            self.register_parameter('bias', None)
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        nn.init.xavier_uniform_(self.weight, nn.init.calculate_gain('leaky_relu', self.negative_slope))
+        nn.init.xavier_uniform_(self.att, nn.init.calculate_gain('leaky_relu', self.negative_slope))
+        nn.init.zeros_(self.bias)
 
     def forward(self, x, edge_index, edge_attr):
         """Perform message passing operator
@@ -138,12 +151,16 @@ class MGCNConv(MessagePassing):
             edge_attr: (tensor) local edge embeddings. shape: [E, d]
         """
         # add self-loops to the adjacency matrix
+        # the edge type of self-loop is the padding relation
         edge_index, _ = add_self_loops(edge_index, num_nodes=x.size(0))
-        # edge_attr = torch.cat((edge_attr, self.loop_emb.repeat(x.size(0), 1)), dim=0)
-        edge_attr = torch.cat((edge_attr, torch.ones(x.size(0), dtype=edge_attr.dtype, device=edge_attr.device) * self.num_relation))
+        edge_attr = torch.cat((edge_attr,
+                               torch.ones(x.size(0), dtype=edge_attr.dtype, device=edge_attr.device) * self.num_relation))
+
+        x = torch.matmul(x, self.weight)
+
         return self.propagate(edge_index, size=(x.size(0), x.size(0)), x=x, edge_attr=edge_attr)
 
-    def message(self, x_j, edge_index, size, edge_attr):
+    def message(self, x_i, x_j, edge_index_i, edge_index_j, size_i, edge_attr):
         """
         Construct messages to node i in analogy to ϕ for each edge in (j, i).
 
@@ -152,19 +169,31 @@ class MGCNConv(MessagePassing):
             edge_index: respective edges. shape: [E]
             edge_attr: edge embeddings. shape: [E, d]
         """
-        # transform node features using edge features
-        x_j = torch.matmul(x_j.unsqueeze_(dim=1), self.relation_matrix[edge_attr])
-        x_j = torch.squeeze(x_j, dim=1)
+        # compute attention coefficients
+        x_j = x_j.view(-1, self.heads, self.out_channels)
+        x_i = x_i.view(-1, self.heads, self.out_channels)
+        alpha = (torch.cat([x_i, x_j], dim=-1) * self.att[edge_attr]).sum(dim=-1)
 
-        # normalize node feature
-        row, col = edge_index
-        deg = degree(row, size[0], dtype=x_j.dtype)
-        deg_inv_sqrt = deg.pow(-0.5)
-        norm = deg_inv_sqrt[row] * deg_inv_sqrt[col]
+        alpha = F.leaky_relu(alpha, self.negative_slope)
+        alpha = softmax(alpha, edge_index_i, size_i)
 
-        return norm.view(-1, 1) * x_j
+        # sample attention coefficients stochastically
+        alpha = F.dropout(alpha, p=self.dropout, training=self.training)
+
+        return x_j * alpha.view(-1, self.heads, 1)
 
     def update(self, aggr_out):
-        """ Return new node embeddings, aggr_out has shape [N, out_channels]"""
+        """ Return new node embeddings"""
+        if self.concat is True:
+            aggr_out = aggr_out.view(-1, self.heads * self.out_channels)
+        else:
+            aggr_out = aggr_out.mean(dim=1)
+
+        if self.bias is not None:
+            aggr_out = aggr_out + self.bias
         return aggr_out
 
+    def __repr__(self):
+        return '{}({}, {}, heads={})'.format(self.__class__.__name__,
+                                             self.in_channels,
+                                             self.out_channels, self.heads)

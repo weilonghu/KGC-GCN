@@ -23,23 +23,30 @@ class MGCN(torch.nn.Module):
         self.emb_dim = params.emb_dim
         self.norm = params.norm
         self.regularization = params.regularization
+        self.negative_rate = params.negative_rate
 
         self.entity_embedding = nn.Embedding(num_entities, self.emb_dim)
         self.relation_embedding = nn.Parameter(torch.Tensor(num_relations, self.emb_dim))
 
-        self.conv1 = MGCNConv(self.emb_dim, self.emb_dim, 2 * num_relations, heads=4)
-        self.conv2 = MGCNConv(self.emb_dim * 4, self.emb_dim * 2, 2 * num_relations, heads=2)
-        self.conv3 = MGCNConv(self.emb_dim * 4, self.emb_dim, 2 * num_relations, heads=1)
+        self.conv1 = MGCNConv(self.emb_dim, self.emb_dim, num_relations, heads=8, dropout=0.2)
+        self.conv2 = MGCNConv(self.emb_dim * 8, self.emb_dim, num_relations, heads=4, dropout=0.1)
+        self.conv3 = MGCNConv(self.emb_dim * 4, self.emb_dim, num_relations, heads=1)
 
-        # self.critetion = nn.MarginRankingLoss(margin=params.margin, reduction='mean')
+        self.critetion = nn.MarginRankingLoss(margin=params.margin, reduction='mean')
 
         self.reset_parameter()
 
     def reset_parameter(self):
         """Initialize embeddings of model with the way used in transE"""
-        # uniform_range = 6 / math.sqrt(self.emb_dim)
-        # self.entity_embedding.weight.data.uniform_(-uniform_range, uniform_range)
-        nn.init.xavier_uniform_(self.relation_embedding, gain=nn.init.calculate_gain('relu'))
+        uniform_range = 6 / math.sqrt(self.emb_dim)
+        self.entity_embedding.weight.data.uniform_(-uniform_range, uniform_range)
+        # nn.init.xavier_uniform_(self.relation_embedding, gain=nn.init.calculate_gain('relu'))
+        self.relation_embedding.data.uniform_(-uniform_range, uniform_range)
+
+    def from_pretrained_emb(self, pretrained_entity, pretrained_relation):
+        """Initialize entity embeddings and relation embeddings with pretrained embeddings"""
+        self.entity_embedding.from_pretrained(embeddings=pretrained_entity)
+        self.relation_embedding.data.copy_(pretrained_relation)
 
     def forward(self, data):
         """Encode entity in graph 'data' using graph convolutional network
@@ -53,7 +60,7 @@ class MGCN(torch.nn.Module):
 
         x = self.entity_embedding(entity)
         x = self.conv1(x, edge_index, edge_attr)
-        x = self.conv2(x, edge_index, edge_attr)
+        x = F.leaky_relu(self.conv2(x, edge_index, edge_attr))
         x = F.dropout(x, p = self.dropout_ratio, training = self.training)
         x = self.conv3(x, edge_index, edge_attr)
 
@@ -71,10 +78,10 @@ class MGCN(torch.nn.Module):
         s = embedding[triplets[:, 0]]
         r = self.relation_embedding[triplets[:, 1]]
         o = embedding[triplets[:, 2]]
-        # scores = torch.norm(s + r - o, p=self.norm, dim=1)
-        scores = torch.sum(s * r * o, dim=1)
+        scores = torch.norm(s + r - o, p=self.norm, dim=1)
+        # scores = torch.sum(s * r * o, dim=1)
 
-        return scores
+        return scores.view(-1)
 
     def reg_loss(self, embedding):
         """Regularization loss"""
@@ -87,19 +94,26 @@ class MGCN(torch.nn.Module):
         scores = self.score_func(embedding, triplets)
 
         # compute margin loss
-        # pos_scores, neg_scores = scores.view(2, -1)
-        # target = torch.tensor([-1], dtype=torch.long, device=scores.device)
-        # loss = self.critetion(pos_scores, neg_scores, target)
+        pos_size = scores.size(0) // (1 + self.negative_rate)
+        pos_scores, neg_scores = scores[:pos_size], scores[pos_size:]
+        pos_scores = pos_scores.repeat((1, self.negative_rate)).view(-1)
+        target = torch.tensor([-1], dtype=torch.long, device=scores.device)
+        loss = self.critetion(pos_scores, neg_scores, target)
 
         # compute cross-entropy loss
-        loss = F.binary_cross_entropy_with_logits(scores, labels)
-        # loss += self.reg_loss(embedding)
+        # loss = F.binary_cross_entropy_with_logits(scores, labels)
 
-        # compute accuracy
-        logits = torch.sigmoid(scores)
-        pred = logits >= 0.5
-        true = labels >= 0.5
-        acc = torch.mean(pred.eq(true).float())
+        # compute accuracy based on distmult
+        # logits = torch.sigmoid(scores)
+        # pred = logits >= 0.5
+        # true = labels >= 0.5
+        # acc = torch.mean(pred.eq(true).float())
+
+        # comput accuracy based on transE
+        pred = pos_scores < neg_scores
+        acc = torch.mean(pred.float())
+
+        loss += self.reg_loss(embedding)
 
         return loss, acc
 

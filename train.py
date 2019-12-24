@@ -84,7 +84,7 @@ def train_and_evaluate(model, data_manager, optimizer, params, model_dir, restor
         loader = data_manager.neighbor_sampler(batch_size=params.batch_size,
                                                shuffle=True,
                                                size=neighbor_sampler_size,
-                                               num_hops=params.num_hops)
+                                               num_hops=params.sampler_num_hops)
 
     epoches = trange(params.epoch_num)
     for epoch in epoches:
@@ -154,8 +154,8 @@ if __name__ == '__main__':
     # prepare model
     model = MGCN(data_manager.num_entity, data_manager.num_relation, params)
     if params.load_pretrain:
-        model.from_pretrained_emb(dataset.pretrained_entity,
-                                  dataset.pretrained_relation)
+        model.from_pretrained_emb(data_manager.pretrained_entity,
+                                  data_manager.pretrained_relation)
     model.to(params.device)
 
     if params.n_gpu > 1 and args.multi_gpu:

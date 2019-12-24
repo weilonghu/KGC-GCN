@@ -21,13 +21,13 @@ def sort_and_rank(scores, target):
     Return:
         rank of the interested triplet, shape=[]
     """
-    _, indices = torch.sort(scores, dim=1, descending=True)
+    _, indices = torch.sort(scores.view(1, -1), dim=1, descending=False)
     indices = torch.nonzero(indices == target.view(-1, 1))
     indices = indices[:, 1].view(-1)
     return indices
 
 
-def calc_mrr(entity, relation, test_triplets, all_triplets, hits=[]):
+def calc_mrr(entity, model, test_triplets, all_triplets, hits=[]):
     """Calculate MRR (filtered) and Hits @ (1, 3, 10)
 
     For each test triplet, the head is removed and replaced by each of the entities of the dictionary in turn.
@@ -41,7 +41,7 @@ def calc_mrr(entity, relation, test_triplets, all_triplets, hits=[]):
 
     Args:
         entity: entity embeddings output by our model
-        model: (MGCN) used for score function
+        model: (MGCN) used as score function
         test_triplets: (2-d array) triplets in test set
         all_triplets: (2-d array) triplets in train, valid and test set
         hits: (list) [1, 3, 10]
@@ -73,24 +73,25 @@ def calc_mrr(entity, relation, test_triplets, all_triplets, hits=[]):
         perturb_entity_ids = torch.cat((perturb_entity_ids, obj.view(-1)))
 
         # generate new triplets for scoring
-        # corrupted_triplets = torch.cat(
-        #     (
-        #         sub * torch.ones_like(perturb_entity_ids).view(-1, 1),
-        #         rel * torch.ones_like(perturb_entity_ids).view(-1, 1),
-        #         perturb_entity_ids.view(-1, 1)
-        #     ),
-        #     dim=1
-        # )
+        corrupted_triplets = torch.cat(
+            (
+                sub * torch.ones_like(perturb_entity_ids).view(-1, 1),
+                rel * torch.ones_like(perturb_entity_ids).view(-1, 1),
+                perturb_entity_ids.view(-1, 1)
+            ),
+            dim=1
+        )
 
         # calculate scores for all corrupted triplets
-        product = entity[sub] * relation[rel]
-        product = product.view(-1, 1, 1)
+        # product = entity[sub] * relation[rel]
+        # product = product.view(-1, 1, 1)
 
-        perurb_obj_emb = entity[perturb_entity_ids].transpose(0, 1).unsqueeze(1)
+        # perurb_obj_emb = entity[perturb_entity_ids].transpose(0, 1).unsqueeze(1)
             
-        out_prod = torch.bmm(product, perurb_obj_emb)
+        # out_prod = torch.bmm(product, perurb_obj_emb)
 
-        scores = torch.sigmoid(torch.sum(out_prod, dim = 0))
+        # scores = torch.sigmoid(torch.sum(out_prod, dim = 0))
+        scores = model.score_func(entity, corrupted_triplets)
             
         target = torch.tensor(len(perturb_entity_ids) - 1)
         ranks_o.append(sort_and_rank(scores, target))
@@ -106,15 +107,26 @@ def calc_mrr(entity, relation, test_triplets, all_triplets, hits=[]):
         # add the current test triplet
         perturb_entity_ids = torch.cat((perturb_entity_ids, sub.view(-1)))
 
+        # generate new triplets for scoring
+        corrupted_triplets = torch.cat(
+            (
+                perturb_entity_ids.view(-1, 1),
+                rel * torch.ones_like(perturb_entity_ids).view(-1, 1),
+                obj * torch.ones_like(perturb_entity_ids).view(-1, 1),
+            ),
+            dim=1
+        )
+
         # calculate scores for all corrupted triplets
-        product = entity[obj] * relation[rel]
-        product = product.view(-1, 1, 1)
+        # product = entity[obj] * relation[rel]
+        # product = product.view(-1, 1, 1)
 
-        perurb_sub_emb = entity[perturb_entity_ids].transpose(0, 1).unsqueeze(1)
+        # perurb_sub_emb = entity[perturb_entity_ids].transpose(0, 1).unsqueeze(1)
             
-        out_prod = torch.bmm(product, perurb_sub_emb)
+        # out_prod = torch.bmm(product, perurb_sub_emb)
 
-        scores = torch.sigmoid(torch.sum(out_prod, dim = 0))
+        # scores = torch.sigmoid(torch.sum(out_prod, dim = 0))
+        scores = model.score_func(entity, corrupted_triplets)
             
         target = torch.tensor(len(perturb_entity_ids) - 1)
         ranks_s.append(sort_and_rank(scores, target))

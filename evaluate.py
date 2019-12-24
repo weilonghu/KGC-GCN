@@ -33,9 +33,8 @@ def evaluate(model, test_graph, eval_triplets, all_triplets, params, mark='Eval'
     # compute embeddings for entities
     with torch.no_grad():
         entity_embedding = model(test_graph)
-        relation_embedding = model.relation_embedding.data.cpu()
         # calculate mrr
-        metrics = calc_mrr(entity_embedding, relation_embedding, eval_triplets, all_triplets, hits=[1, 3, 10])
+        metrics = calc_mrr(entity_embedding, model, eval_triplets, all_triplets, hits=[1, 3, 10])
 
     model.to(params.device)
 
@@ -43,7 +42,7 @@ def evaluate(model, test_graph, eval_triplets, all_triplets, params, mark='Eval'
     metrics['measure'] = metrics['mrr']
     metrics_str = "; ".join("{}: {:05.2f}".format(k, v)
                             for k, v in metrics.items())
-    logging.info("\n- {} metrics: {}\n".format(mark, metrics_str))
+    logging.info("- {} metrics: {}  ".format(mark, metrics_str))
 
     return metrics
 

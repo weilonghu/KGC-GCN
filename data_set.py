@@ -61,6 +61,8 @@ class DataSet(data.Dataset):
         self.num_entity = len(self.entity2id)
         self.num_relation = len(self.relation2id)
 
+        self.train_indices = list(range(len(self.triplets['train'])))
+
         # report the dataset
         logging.info('num_entities: {}'.format(self.num_entity))
         logging.info('num_relations: {}'.format(self.num_relation))
@@ -115,7 +117,8 @@ class DataSet(data.Dataset):
         ))
 
     def __len__(self):
-        return self.triplets['train'].shape[0]
+        return len(self.train_indices)
 
     def __getitem__(self, index):
-        return self.triplets['train'][index]
+        """Only reture the selected index"""
+        return self.train_indices[index]

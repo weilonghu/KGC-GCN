@@ -36,13 +36,13 @@ def train(model, loader, optimizer, params):
     # set the model to training mode
     model.train()
 
-    optimizer.zero_grad()
-
     # a running average object for loss and acc
     loss_avg = utils.RunningAverage()
     acc_avg = utils.RunningAverage()
     
     for data in loader:
+        optimizer.zero_grad()
+
         entity_embedding = model(data.to(params.device))
         loss, acc = model.loss_func(entity_embedding, data.samples, data.labels)
 
@@ -62,7 +62,7 @@ def train(model, loader, optimizer, params):
     return loss_avg(), acc_avg()
 
 
-def train_and_evaluate(model, data_manager, optimizer, params, model_dir, restore_dir):
+def train_and_evaluate(model, data_manager, optimizer, scheduler, params, model_dir, restore_dir):
     """Train the model and evaluate every epoch"""
     # reload weights from restore_dir if specified
     if restore_dir is not None:
@@ -94,6 +94,8 @@ def train_and_evaluate(model, data_manager, optimizer, params, model_dir, restor
         if args.loader_type == 0:
             loader = [data_manager.build_train_graph()]
         loss, acc = train(model, loader, optimizer, params)
+
+        scheduler.step()
 
         epoches.set_postfix(loss='{:05.3f}'.format(loss), acc='{:05.3f}'.format(acc))
 
@@ -165,12 +167,13 @@ if __name__ == '__main__':
     if params.n_gpu > 1 and args.multi_gpu:
         model = torch.nn.DataParallel(model)
 
-    # prepare optimizer
+    # prepare optimizer and scheduler
     optimizer = torch.optim.Adam(
         model.parameters(), lr=params.learning_rate, weight_decay=params.weight_decay)
-    # optimizer = torch.optim.SGD(model.parameters(), lr=params.learning_rate, momentum=0.3)
+    # optimizer = torch.optim.SGD(model.parameters(), lr=params.learning_rate, momentum=0.9)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.9, last_epoch=-1)
 
     # train and evaluate the model
     logging.info('Starting training for {} epoch(s)'.format(params.epoch_num))
-    train_and_evaluate(model, data_manager, optimizer,
+    train_and_evaluate(model, data_manager, optimizer, scheduler,
                        params, model_dir, args.restore_dir)

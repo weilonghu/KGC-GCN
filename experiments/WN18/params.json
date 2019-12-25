@@ -1,26 +1,27 @@
 {
-    "learning_rate": 0.01,
+    "learning_rate": 1e-2,
     "weight_decay": 0,
     "clip_grad": 1.0,
 
-    "epoch_num": 10000,
+    "epoch_num": 20000,
     "min_epoch_num": 1000,
-    "eval_every": 500,
-    "patience": 0.02,
+    "eval_every": 2500,
+    "patience": 0.01,
     "patience_num": 10,
 
-    "regularization": 1e-2,
-    "emb_dim": 50,
+    "regularization": 1e-4,
+    "emb_dim": 100,
     "batch_size": 40000,
     "negative_rate": 1,
     "dropout": 0.2,
     "margin": 1.0,
     "norm": 1,
-    "split_size": 0.7,
+    "split_size": 0.5,
     "num_worker": 0,
 
     "sampler_size": "5 10",
-    "sampler_num_hops": 1,
+    "sampler_num_hops": 2,
+    "bi_directional": true,
 
     "load_pretrain": false
 }

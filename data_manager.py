@@ -1,6 +1,7 @@
 """Interface used for dataset and batch-wise training"""
 
 import os
+import logging
 
 import torch
 import numpy as np
@@ -25,8 +26,11 @@ class DataManager(object):
         self.num_entity = self.data_set.num_entity
         self.num_relation = self.data_set.num_relation
 
-        self.pretrained_entity = torch.from_numpy(self.data_set.pretrain_entity)
-        self.pretrained_relation = torch.from_numpy(self.data_set.pretrain_relation)
+        try:
+            self.pretrained_entity = torch.from_numpy(self.data_set.pretrain_entity)
+            self.pretrained_relation = torch.from_numpy(self.data_set.pretrain_relation)
+        except AttributeError:
+            logging.info('Pretrained embeddings not found')
 
         self.num_worker = params.num_worker
 

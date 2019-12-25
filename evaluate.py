@@ -22,6 +22,10 @@ parser.add_argument('--restore_dir', default=None,
                     help="Optional, name of the directory containing weights to reload before training, e.g., 'experiments'")
 parser.add_argument('--multi_gpu', default=False, action='store_true',
                     help="Whether to use multiple GPUs if available")
+parser.add_argument('--loader_type', default=0, type=int,
+                    help="0: one graph and one batch in each epoch;\
+                          1: torch_geometric.data.NeighborSampler, can generate n-hops graph;\
+                          2: torch.utils.data.DataLoader, split dataset to n batches and generate n graphs")
 
 
 def evaluate(model, test_graph, eval_triplets, all_triplets, params, mark='Eval', verbose=False):

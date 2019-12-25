@@ -96,7 +96,7 @@ class DataSet(data.Dataset):
         triplets = []
         with open(os.path.join(data_dir, data_type + '.txt'), 'r') as f:
             for line in f:
-                head, tail, relation = line.strip().split()
+                head, relation, tail = line.strip().split()
                 triplets.append((self.entity2id[head], self.relation2id[relation], self.entity2id[tail]))
 
         return np.array(triplets)

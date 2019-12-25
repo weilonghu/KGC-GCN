@@ -17,7 +17,7 @@ from data_manager import DataManager
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--dataset', default='WN18',
+parser.add_argument('--dataset', default='WN18RR',
                     help="Directory containing the dataset")
 parser.add_argument('--seed', default=2019,
                     help="random seed for initialization")
@@ -67,6 +67,7 @@ def train_and_evaluate(model, data_manager, optimizer, scheduler, params, model_
     # reload weights from restore_dir if specified
     if restore_dir is not None:
         utils.load_checkpoint(os.path.join(restore_dir, 'last.ckpt'), model)
+        logging.info('Restore model from {}'.format(os.path.join(restore_dir, 'last.ckpt')))
 
     # main evaluation criteria
     best_measure = 0
@@ -160,8 +161,11 @@ if __name__ == '__main__':
     # prepare model
     model = MGCN(data_manager.num_entity, data_manager.num_relation, params)
     if params.load_pretrain:
-        model.from_pretrained_emb(data_manager.pretrained_entity,
-                                  data_manager.pretrained_relation)
+        try:
+            model.from_pretrained_emb(data_manager.pretrained_entity,
+                                    data_manager.pretrained_relation)
+        except AttributeError:
+            logging.info('No pretrained embeddings found')
     model.to(params.device)
 
     if params.n_gpu > 1 and args.multi_gpu:

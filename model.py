@@ -6,6 +6,7 @@ from torch_geometric.nn.conv import MessagePassing
 from torch_geometric.utils import add_self_loops, remove_self_loops, softmax
 
 from utils import uniform
+from metric import score_func
 
 
 class MGCN(torch.nn.Module):
@@ -28,9 +29,8 @@ class MGCN(torch.nn.Module):
         self.entity_embedding = nn.Embedding(num_entities, self.emb_dim)
         self.relation_embedding = nn.Parameter(torch.Tensor(num_relations, self.emb_dim))
 
-        self.conv1 = MGCNConv(self.emb_dim, self.emb_dim, 2 * num_relations, heads=4, dropout=0.2)
-        self.conv2 = MGCNConv(self.emb_dim * 4, self.emb_dim, 2 * num_relations, heads=2, dropout=0.2)
-        self.conv3 = MGCNConv(self.emb_dim * 2, self.emb_dim, 2 * num_relations, heads=1)
+        self.conv1 = MGCNConv(self.emb_dim, self.emb_dim, 2 * num_relations, heads=8)
+        self.conv2 = MGCNConv(self.emb_dim * 8, self.emb_dim, 2 * num_relations, heads=1)
 
         self.critetion = nn.MarginRankingLoss(margin=params.margin, reduction='mean')
 
@@ -58,29 +58,11 @@ class MGCN(torch.nn.Module):
         entity, edge_index, edge_attr = data.entity, data.edge_index, data.edge_attr
 
         x = self.entity_embedding(entity)
-        x = self.conv1(x, edge_index, edge_attr)
-        x = F.relu(self.conv2(x, edge_index, edge_attr))
+        x = F.leaky_relu(self.conv1(x, edge_index, edge_attr))
         x = F.dropout(x, p = self.dropout_ratio, training = self.training)
-        x = self.conv3(x, edge_index, edge_attr)
+        x = self.conv2(x, edge_index, edge_attr)
 
         return x
-
-    def score_func(self, embedding, triplets):
-        """Scoring each triplet in 'triplets'
-
-        Args:
-            embedding: (torch.FloatTensor), entity embeddings used in triplets
-            triplets: (torch.LongTensor), triplets for scoring
-        Return:
-            torch.FloatTensor, one score for each triplet
-        """
-        s = embedding[triplets[:, 0]]
-        r = self.relation_embedding[triplets[:, 1]]
-        o = embedding[triplets[:, 2]]
-        # scores = torch.norm(s + r - o, p=self.norm, dim=1)
-        scores = torch.sum(s * r * o, dim=1)
-
-        return scores
 
     def reg_loss(self, embedding):
         """Regularization loss"""
@@ -90,7 +72,7 @@ class MGCN(torch.nn.Module):
 
     def loss_func(self, embedding, triplets, labels):
         """Compute loss for the model"""
-        scores = self.score_func(embedding, triplets)
+        scores = score_func(embedding, self.relation_embedding, triplets)
 
         # compute margin loss
         # pos_size = scores.size(0) // (1 + self.negative_rate)

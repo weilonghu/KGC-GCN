@@ -29,8 +29,10 @@ class MGCN(torch.nn.Module):
         self.entity_embedding = nn.Embedding(num_entities, self.emb_dim)
         self.relation_embedding = nn.Parameter(torch.Tensor(num_relations, self.emb_dim))
 
-        self.conv1 = MGCNConv(self.emb_dim, self.emb_dim, 2 * num_relations, heads=8)
-        self.conv2 = MGCNConv(self.emb_dim * 8, self.emb_dim, 2 * num_relations, heads=1)
+        direction = 2 if params.bi_directional is True else 1
+
+        self.conv1 = MGCNConv(self.emb_dim, self.emb_dim, direction * num_relations, heads=8)
+        self.conv2 = MGCNConv(self.emb_dim * 8, self.emb_dim, direction * num_relations, heads=1)
 
         self.critetion = nn.MarginRankingLoss(margin=params.margin, reduction='mean')
 
@@ -40,7 +42,7 @@ class MGCN(torch.nn.Module):
         """Initialize embeddings of model with the way used in transE"""
         # uniform_range = 6 / math.sqrt(self.emb_dim)
         # self.entity_embedding.weight.data.uniform_(-uniform_range, uniform_range)
-        nn.init.xavier_uniform_(self.relation_embedding, gain=nn.init.calculate_gain('relu'))
+        nn.init.xavier_uniform_(self.relation_embedding, gain=nn.init.calculate_gain('leaky_relu'))
 
     def from_pretrained_emb(self, pretrained_entity, pretrained_relation):
         """Initialize entity embeddings and relation embeddings with pretrained embeddings"""
@@ -121,7 +123,7 @@ class MGCNConv(MessagePassing):
         self.dropout = dropout
 
         self.weight = nn.Parameter(torch.Tensor(in_channels, heads * out_channels))
-        self.att = nn.Parameter(torch.Tensor(num_relation + 1, heads, 2 * out_channels))
+        self.att = nn.Parameter(torch.Tensor(num_relation + 1, heads, out_channels))
 
         if bias and concat:
             self.bias = nn.Parameter(torch.Tensor(heads * out_channels))
@@ -135,7 +137,7 @@ class MGCNConv(MessagePassing):
     def reset_parameters(self):
         nn.init.xavier_uniform_(self.weight, nn.init.calculate_gain('leaky_relu', self.negative_slope))
         nn.init.xavier_uniform_(self.att, nn.init.calculate_gain('leaky_relu', self.negative_slope))
-        nn.init.zeros_(self.bias)
+        uniform(self.bias.size(0), self.bias)
 
     def forward(self, x, edge_index, edge_attr):
         """Perform message passing operator
@@ -167,7 +169,8 @@ class MGCNConv(MessagePassing):
         # compute attention coefficients
         x_j = x_j.view(-1, self.heads, self.out_channels)
         x_i = x_i.view(-1, self.heads, self.out_channels)
-        alpha = (torch.cat([x_i, x_j], dim=-1) * self.att[edge_attr]).sum(dim=-1)
+        # alpha = (torch.cat([x_i, x_j], dim=-1) * self.att[edge_attr]).sum(dim=-1)
+        alpha = (x_i * self.att[edge_attr] * x_j).sum(dim=-1)
 
         alpha = F.leaky_relu(alpha, self.negative_slope)
         alpha = softmax(alpha, edge_index_i, size_i)

@@ -5,7 +5,7 @@
 
     "epoch_num": 20000,
     "min_epoch_num": 1000,
-    "eval_every": 2500,
+    "eval_every": 1000,
     "patience": 0.01,
     "patience_num": 10,
 
@@ -16,12 +16,13 @@
     "dropout": 0.2,
     "margin": 1.0,
     "norm": 1,
-    "split_size": 0.5,
+    "split_size": 0.7,
     "num_worker": 0,
 
     "sampler_size": "5 10",
     "sampler_num_hops": 2,
     "bi_directional": true,
 
-    "load_pretrain": false
+    "load_pretrain": false,
+    "eval_gpu": false
 }

@@ -23,7 +23,7 @@ def score_func(entity: torch.Tensor, relation: torch.tensor, triplets: torch.Ten
     o = entity[triplets[:, 2]]
 
     # transE, (h + r - t)
-    # scores = torch.norm(s + r - o, p=self.norm, dim=1)
+    # scores = torch.norm(s + r - o, p=1, dim=1)
 
     # distmult, (h * r * t)
     scores = torch.sum(s * r * o, dim=1)

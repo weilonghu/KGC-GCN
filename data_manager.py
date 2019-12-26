@@ -91,6 +91,7 @@ class DataManager(object):
 
         data = Data(edge_index = edge_index, edge_attr=edge_attr)
         data.entity = torch.from_numpy(uniq_entity)
+        data.num_nodes = len(uniq_entity)
         data.edge_norm = self._edge_normal(edge_attr, edge_index, len(uniq_entity), self.num_relation)
         data.samples = torch.from_numpy(samples)
         data.labels = torch.from_numpy(labels)
@@ -219,6 +220,7 @@ class DataManager(object):
 
         data = Data(edge_index = edge_index, edge_attr=edge_attr)
         data.entity = torch.from_numpy(np.arange(self.num_entity))
+        data.num_nodes = self.num_entity
         data.edge_norm = self._edge_normal(edge_attr, edge_index, self.num_entity, self.num_relation)
 
         return data

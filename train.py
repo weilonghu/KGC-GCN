@@ -11,7 +11,7 @@ import torch.nn as nn
 from tqdm import trange
 
 import utils
-from model import MGCN
+from gat import MGCN
 from evaluate import evaluate
 from data_manager import DataManager
 

@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader
 from torch_geometric.data import Data
 from torch_geometric.data import NeighborSampler
 from torch_scatter import scatter_add
+from torch_geometric.utils import remove_isolated_nodes
 
 from data_set import DataSet
 from utils import MakeIter
@@ -111,7 +112,7 @@ class DataManager(object):
                           num_workers=num_workers,
                           drop_last=drop_last)
 
-    def neighbor_sampler(self, batch_size, size=1, shuffle=True, num_hops=1, drop_last=False):
+    def neighbor_sampler(self, batch_size, size=1, shuffle=True, num_hops=1, drop_last=True):
         """The neighbor sampler from the “Inductive Representation Learning on Large Graphs” paper implemented by torch_geometric
 
         Args:
@@ -120,7 +121,16 @@ class DataManager(object):
         Return:
             torch_geometric.data.Data object.
         """
-        train_data = self.build_test_graph()
+        # create graph
+        src, rel, dst = self.fetch_triplets('train').transpose(0, 1)
+
+        edge_index = torch.stack((src, dst))
+        edge_attr = rel
+
+        train_data = Data(edge_index = edge_index, edge_attr=edge_attr)
+        train_data.entity = torch.from_numpy(np.arange(self.num_entity))
+        train_data.num_nodes = self.num_entity
+
         loader = NeighborSampler(train_data,
                                  size=size,
                                  num_hops=num_hops,
@@ -133,18 +143,31 @@ class DataManager(object):
         def generator():
             for data in loader():
                 n_id, e_id, edge_index = data.n_id, data.e_id, data.edge_index
+                # the neighborsampler first select b_ids as tail nodes, then select head nodes
+                # if one node only present at head nodes, it becomes as a isolated node
+                edge_index, rel, mask = remove_isolated_nodes(edge_index, edge_attr=train_data.edge_attr[e_id], num_nodes=n_id.size(0))
+                n_id = n_id[mask]
                 # construct batch triplets
-                head, tail = edge_index[0], edge_index[1]
-                rel = train_data.edge_attr[e_id]
+                src, dst = edge_index[0], edge_index[1]
                 # negtive sampling
-                pos_samples = torch.cat((head.view(-1, 1), rel.view(-1, 1), tail.view(-1, 1)), dim=1)
-                samples, labels = self._negative_sampling(pos_samples, n_id.size(0), self.negative_rate)
+                pos_samples = torch.cat((src.view(-1, 1), rel.view(-1, 1), dst.view(-1, 1)), dim=1)
+                # make sure 'pos_samples' and 'neg_samples' are the same type, or they will share memory
+                samples, labels = self._negative_sampling(pos_samples.numpy(), n_id.size(0), self.negative_rate)
 
-                n_data = Data(edge_index = edge_index, edge_attr=rel)
+                # Create bi-directional graph
+                if self.bi_directional is True:
+                    src, dst = torch.cat((src, dst)), torch.cat((dst, src))
+                    rel = torch.cat((rel, rel + self.num_relation))
+
+                edge_index = torch.stack((src, dst))
+                edge_attr = rel
+
+                n_data = Data(edge_index = edge_index, edge_attr=edge_attr)
                 n_data.entity = n_id
                 n_data.samples = torch.from_numpy(samples)
                 n_data.labels = torch.from_numpy(labels)
                 n_data.num_nodes = n_id.size(0)
+                n_data.edge_norm = self._edge_normal(edge_attr, edge_index, n_data.num_nodes, self.num_relation)
 
                 yield n_data
 
@@ -153,7 +176,7 @@ class DataManager(object):
     """
     Functions used to build graph
     """
-    def _negative_sampling(self, pos_samples, num_entity, negative_rate: int):
+    def _negative_sampling(self, pos_samples: np.ndarray, num_entity, negative_rate: int):
         """Sample negative triplets for training
 
         Args:
@@ -178,9 +201,6 @@ class DataManager(object):
         neg_samples[obj, 2] = values[obj]
 
         return np.concatenate((pos_samples, neg_samples)), labels
-
-    def _global_negative_sampling(self, pos_samples, num_entity, negative_rate: int):
-        pass
 
     def _edge_normal(self, edge_type, edge_index, num_entity, num_relation):
         '''

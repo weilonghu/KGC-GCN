@@ -6,6 +6,7 @@ import logging
 import os
 
 import torch
+from tqdm import tqdm
 
 import utils
 from model import MGCN
@@ -47,7 +48,7 @@ def evaluate(model, test_graph, eval_triplets, all_triplets, params, mark='Eval'
     metrics['measure'] = metrics['mrr']
     metrics_str = "; ".join("{}: {:05.2f}".format(k, v)
                             for k, v in metrics.items())
-    logging.info("- {} metrics: {}  ".format(mark, metrics_str))
+    tqdm.write("- {} metrics: {}  ".format(mark, metrics_str))
 
     return metrics
 

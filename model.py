@@ -1,4 +1,3 @@
-import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -43,7 +42,7 @@ class MGCN(torch.nn.Module):
         x = self.entity_embedding(entity)
         x = self.conv1(x, edge_index, edge_type, edge_norm)
         x = F.relu(self.conv1(x, edge_index, edge_type, edge_norm))
-        x = F.dropout(x, p = self.dropout_ratio, training = self.training)
+        x = F.dropout(x, p=self.dropout_ratio, training=self.training)
         x = self.conv2(x, edge_index, edge_type, edge_norm)
 
         return x
@@ -158,14 +157,12 @@ class MGCNConv(MessagePassing):
         uniform(size, self.bias)
         uniform(size, self.weight)
 
-
     def forward(self, x, edge_index, edge_type, edge_norm=None, size=None):
         """"""
         return self.propagate(edge_index, size=size, x=x, edge_type=edge_type,
                               edge_norm=edge_norm)
 
-
-    def message(self, x_i, x_j, edge_index_i, edge_index_j, edge_type, edge_norm):
+    def message(self, x_i, x_j, edge_index_i, edge_index_j, edge_index, edge_type, edge_norm):
         alpha = (x_i * self.weight * x_j).sum(dim=1)
         alpha = softmax(alpha, edge_index_i, edge_index_i.size(0))
 

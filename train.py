@@ -4,7 +4,6 @@ import argparse
 import logging
 import os
 import random
-import math
 
 import torch
 import torch.nn as nn
@@ -39,7 +38,7 @@ def train(model, loader, optimizer, params):
     # a running average object for loss and acc
     loss_avg = utils.RunningAverage()
     acc_avg = utils.RunningAverage()
-    
+
     for data in loader:
         optimizer.zero_grad()
 
@@ -163,7 +162,7 @@ if __name__ == '__main__':
     if params.load_pretrain:
         try:
             model.from_pretrained_emb(data_manager.pretrained_entity,
-                                    data_manager.pretrained_relation)
+                                      data_manager.pretrained_relation)
         except AttributeError:
             logging.info('No pretrained embeddings found')
     model.to(params.device)

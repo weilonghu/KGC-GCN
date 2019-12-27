@@ -4,22 +4,22 @@
     "clip_grad": 1.0,
 
     "epoch_num": 20000,
-    "min_epoch_num": 1000,
+    "min_epoch_num": 2000,
     "eval_every": 1000,
     "patience": 0.01,
     "patience_num": 10,
 
     "regularization": 1e-4,
     "emb_dim": 100,
-    "batch_size": 40000,
+    "batch_size": 30000,
     "negative_rate": 1,
     "dropout": 0.2,
     "margin": 1.0,
     "norm": 1,
-    "split_size": 0.7,
+    "split_size": 0.5,
     "num_worker": 0,
 
-    "sampler_size": "5 10",
+    "sampler_size": "5 5",
     "sampler_num_hops": 2,
     "bi_directional": true,
 

@@ -16,7 +16,7 @@ from data_manager import DataManager
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--dataset', default='WN18RR',
+parser.add_argument('--dataset', default='FB15k-237',
                     help="Directory containing the dataset")
 parser.add_argument('--seed', default=2019,
                     help="random seed for initialization")
@@ -74,7 +74,7 @@ def train_and_evaluate(model, data_manager, optimizer, scheduler, params, model_
     patience_counter = 0
 
     # evaluation triplet and graph
-    eval_triplets = data_manager.fetch_triplets('val')
+    eval_triplets = data_manager.fetch_triplets('test')
     all_triplets = data_manager.all_triplets()
     test_graph = data_manager.build_test_graph()
 

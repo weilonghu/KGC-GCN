@@ -46,6 +46,12 @@ class DataManager(object):
 
         return torch.from_numpy(self.data_set.triplets[data_type])
 
+    #######################################################################
+    #
+    # Utility function for building training and testing graphs
+    #
+    #######################################################################
+
     def _self_collate_fn(self, batch):
         """Perform negative sampling and create sub-graph
 
@@ -96,6 +102,148 @@ class DataManager(object):
         data.edge_norm = self._edge_normal(edge_attr, edge_index, len(uniq_entity), self.num_relation)
         data.samples = torch.from_numpy(samples)
         data.labels = torch.from_numpy(labels)
+
+        return data
+
+    def _build_graph_from_triplets(self):
+        pass
+
+    def _negative_sampling(self, pos_samples: np.ndarray, num_entity, negative_rate: int):
+        """Sample negative triplets for training
+
+        Args:
+            pos_sample: positive samples
+            num_entity: (int) the number of entities
+            negative_rate: (int) the proportion of negative samples
+        Return:
+            samples: (numpy.ndarray) samples including positive and negative samples
+            labels: (numpy.ndarray) labels whose values in [0, 1]
+        """
+        size = len(pos_samples)
+        # genrate labels
+        labels = np.zeros(size * (negative_rate + 1), dtype=np.float32)
+        labels[: size] = 1  # labels of positive samples
+
+        # sample negative samples
+        neg_samples = np.tile(pos_samples, (negative_rate, 1))
+        values = np.random.choice(num_entity, size=size * negative_rate)
+        choices = np.random.uniform(size=size * negative_rate)
+        subj, obj = choices > 0.5, choices <= 0.5
+        neg_samples[subj, 0] = values[subj]
+        neg_samples[obj, 2] = values[obj]
+
+        return np.concatenate((pos_samples, neg_samples)), labels
+
+    def _edge_normal(self, edge_type, edge_index, num_entity, num_relation):
+        '''
+            Edge normalization trick
+            - one_hot: (num_edge, num_relation)
+            - deg: (num_node, num_relation)
+            - index: (num_edge)
+            - deg[edge_index[0]]: (num_edge, num_relation)
+            - edge_norm: (num_edge)
+        '''
+        # one_hot = F.one_hot(edge_type, num_classes = 2 * num_relation).to(torch.float)
+        # deg = scatter_add(one_hot, edge_index[1], dim = 0, dim_size = num_entity)
+        # index = edge_type + torch.arange(len(edge_index[1])) * (2 * num_relation)
+        # edge_norm = 1 / deg[edge_index[1]].view(-1)[index]
+
+        counts = torch.ones_like(edge_type).to(torch.float)
+        deg = scatter_add(counts, edge_index[1], dim_size=num_entity)
+        edge_norm = 1 / deg[edge_index[1]]
+        edge_norm[torch.isinf(edge_norm)] = 0
+
+        return edge_norm
+
+    def _get_adj_and_degrees(self, num_nodes: int, triplets: np.ndarray):
+        """ Get adjacency list and degrees of the graph"""
+        adj_list = [[] for _ in range(num_nodes)]
+        for i,triplet in enumerate(triplets):
+            adj_list[triplet[0]].append([i, triplet[2]])
+            adj_list[triplet[2]].append([i, triplet[0]])
+
+        degrees = np.array([len(a) for a in adj_list])
+        adj_list = [np.array(a) for a in adj_list]
+        return adj_list, degrees
+
+    def _sample_edge_neighborhood(self, adj_list, degrees, n_triplets, sample_size):
+        """Sample edges by neighborhool expansion.
+        This guarantees that the sampled edges form a connected graph, which
+        may help deeper GNNs that require information from more than one hop.
+        """
+        edges = np.zeros((sample_size), dtype=np.int32)
+
+        #initialize
+        sample_counts = np.array([d for d in degrees])
+        picked = np.array([False for _ in range(n_triplets)])
+        seen = np.array([False for _ in degrees])
+
+        for i in range(0, sample_size):
+            weights = sample_counts * seen
+
+            if np.sum(weights) == 0:
+                weights = np.ones_like(weights)
+                weights[np.where(sample_counts == 0)] = 0
+
+            probabilities = (weights) / np.sum(weights)
+            chosen_vertex = np.random.choice(np.arange(degrees.shape[0]),
+                                            p=probabilities)
+            chosen_adj_list = adj_list[chosen_vertex]
+            seen[chosen_vertex] = True
+
+            chosen_edge = np.random.choice(np.arange(chosen_adj_list.shape[0]))
+            chosen_edge = chosen_adj_list[chosen_edge]
+            edge_number = chosen_edge[0]
+
+            while picked[edge_number]:
+                chosen_edge = np.random.choice(np.arange(chosen_adj_list.shape[0]))
+                chosen_edge = chosen_adj_list[chosen_edge]
+                edge_number = chosen_edge[0]
+
+            edges[i] = edge_number
+            other_vertex = chosen_edge[1]
+            picked[edge_number] = True
+            sample_counts[chosen_vertex] -= 1
+            sample_counts[other_vertex] -= 1
+            seen[other_vertex] = True
+
+        return edges
+
+    def _sample_edge_uniform(self, n_triplets: int, sample_size: int):
+        """Sample edges uniformly from all the edges."""
+        all_edges = np.arange(n_triplets)
+        return np.random.choice(all_edges, sample_size, replace=False)
+
+    #######################################################################
+    #
+    # Utility function for building training and testing graphs
+    #
+    #######################################################################
+
+    def build_train_graph(self):
+        """Build train graph, only one batch"""
+        # sample edges uniformly from all edges
+        train_triplets = self.fetch_triplets('train').numpy()
+        all_edges = np.arange(len(train_triplets))
+        edges = np.random.choice(all_edges, self.batch_size, replace=False)
+
+        return self._generate_sampled_graph_and_labels(train_triplets[edges])
+
+    def build_test_graph(self):
+        src, rel, dst = self.fetch_triplets('train').transpose(0, 1)
+
+        # Create bi-directional graph
+        if self.bi_directional is True:
+            src, dst = torch.cat((src, dst)), torch.cat((dst, src))
+            rel = torch.cat((rel, rel + self.num_relation))
+
+        edge_index = torch.stack((src, dst))
+        edge_attr = rel
+
+        data = Data(edge_index = edge_index, edge_attr=edge_attr)
+        data.entity = torch.from_numpy(np.arange(self.num_entity))
+        data.num_nodes = self.num_entity
+        data.edge_norm = self._edge_normal(edge_attr, edge_index, self.num_entity, self.num_relation)
 
         return data
 
@@ -172,75 +320,3 @@ class DataManager(object):
                 yield n_data
 
         return MakeIter(generator)
-
-    """
-    Functions used to build graph
-    """
-    def _negative_sampling(self, pos_samples: np.ndarray, num_entity, negative_rate: int):
-        """Sample negative triplets for training
-
-        Args:
-            pos_sample: positive samples
-            num_entity: (int) the number of entities
-            negative_rate: (int) the proportion of negative samples
-        Return:
-            samples: (numpy.ndarray) samples including positive and negative samples
-            labels: (numpy.ndarray) labels whose values in [0, 1]
-        """
-        size = len(pos_samples)
-        # genrate labels
-        labels = np.zeros(size * (negative_rate + 1), dtype=np.float32)
-        labels[: size] = 1  # labels of positive samples
-
-        # sample negative samples
-        neg_samples = np.tile(pos_samples, (negative_rate, 1))
-        values = np.random.choice(num_entity, size=size * negative_rate)
-        choices = np.random.uniform(size=size * negative_rate)
-        subj, obj = choices > 0.5, choices <= 0.5
-        neg_samples[subj, 0] = values[subj]
-        neg_samples[obj, 2] = values[obj]
-
-        return np.concatenate((pos_samples, neg_samples)), labels
-
-    def _edge_normal(self, edge_type, edge_index, num_entity, num_relation):
-        '''
-            Edge normalization trick
-            - one_hot: (num_edge, num_relation)
-            - deg: (num_node, num_relation)
-            - index: (num_edge)
-            - deg[edge_index[0]]: (num_edge, num_relation)
-            - edge_norm: (num_edge)
-        '''
-        one_hot = F.one_hot(edge_type, num_classes = 2 * num_relation).to(torch.float)
-        deg = scatter_add(one_hot, edge_index[0], dim = 0, dim_size = num_entity)
-        index = edge_type + torch.arange(len(edge_index[0])) * (2 * num_relation)
-        edge_norm = 1 / deg[edge_index[0]].view(-1)[index]
-
-        return edge_norm
-
-    def build_train_graph(self):
-        """Build train graph, only one batch"""
-        # sample edges uniformly from all edges
-        train_triplets = self.fetch_triplets('train').numpy()
-        all_edges = np.arange(len(train_triplets))
-        edges = np.random.choice(all_edges, self.batch_size, replace=False)
-
-        return self._generate_sampled_graph_and_labels(train_triplets[edges])
-
-    def build_test_graph(self):
-        src, rel, dst = self.fetch_triplets('train').transpose(0, 1)
-
-        # Create bi-directional graph
-        if self.bi_directional is True:
-            src, dst = torch.cat((src, dst)), torch.cat((dst, src))
-            rel = torch.cat((rel, rel + self.num_relation))
-
-        edge_index = torch.stack((src, dst))
-        edge_attr = rel
-
-        data = Data(edge_index = edge_index, edge_attr=edge_attr)
-        data.entity = torch.from_numpy(np.arange(self.num_entity))
-        data.num_nodes = self.num_entity
-        data.edge_norm = self._edge_normal(edge_attr, edge_index, self.num_entity, self.num_relation)
-
-        return data

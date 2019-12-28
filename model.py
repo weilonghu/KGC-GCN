@@ -23,9 +23,9 @@ class MGCN(torch.nn.Module):
         nn.init.xavier_uniform_(self.relation_embedding, gain=nn.init.calculate_gain('relu'))
 
         self.conv1 = MGCNConv(
-            100, 100, num_relations * 2, num_bases=8)
+            100, 100, num_relations * 2, num_bases=64)
         self.conv2 = MGCNConv(
-            100, 100, num_relations * 2, num_bases=8)
+            100, 100, num_relations * 2, num_bases=64)
 
         self.dropout_ratio = params.dropout
         self.regularization = params.regularization
@@ -40,7 +40,7 @@ class MGCN(torch.nn.Module):
         entity, edge_index, edge_type, edge_norm = data.entity, data.edge_index, data.edge_attr, data.edge_norm
 
         x = self.entity_embedding(entity)
-        x = self.conv1(x, edge_index, edge_type, edge_norm)
+        # x = self.conv1(x, edge_index, edge_type, edge_norm)
         x = F.relu(self.conv1(x, edge_index, edge_type, edge_norm))
         x = F.dropout(x, p=self.dropout_ratio, training=self.training)
         x = self.conv2(x, edge_index, edge_type, edge_norm)
@@ -150,12 +150,11 @@ class MGCNConv(MessagePassing):
         self.reset_parameters()
 
     def reset_parameters(self):
-        size = self.num_bases * self.in_channels
-        uniform(size, self.basis)
-        uniform(size, self.att)
-        uniform(size, self.root)
-        uniform(size, self.bias)
-        uniform(size, self.weight)
+        nn.init.xavier_uniform_(self.basis, nn.init.calculate_gain('relu'))
+        nn.init.xavier_uniform_(self.att, nn.init.calculate_gain('relu'))
+        nn.init.xavier_uniform_(self.root, nn.init.calculate_gain('relu'))
+        nn.init.xavier_uniform_(self.weight, nn.init.calculate_gain('relu'))
+        nn.init.zeros_(self.bias)
 
     def forward(self, x, edge_index, edge_type, edge_norm=None, size=None):
         """"""
@@ -163,15 +162,16 @@ class MGCNConv(MessagePassing):
                               edge_norm=edge_norm)
 
     def message(self, x_i, x_j, edge_index_i, edge_index_j, edge_index, edge_type, edge_norm):
-        alpha = (x_i * self.weight * x_j).sum(dim=1)
-        alpha = softmax(alpha, edge_index_i, edge_index_i.size(0))
+        # alpha = (x_i * self.weight * x_j).sum(dim=1)
+        # alpha = softmax(alpha, edge_index_i, edge_index_i.size(0))
 
         w = torch.matmul(self.att, self.basis.view(self.num_bases, -1))
         w = w.view(self.num_relations, self.in_channels, self.out_channels)
         w = torch.index_select(w, 0, edge_type)
         out = torch.bmm(x_j.unsqueeze(1), w).squeeze(-2)
 
-        return (out * edge_norm.view(-1, 1) + out * alpha.view(-1, 1)) / 2
+        # return (out * edge_norm.view(-1, 1) + out * alpha.view(-1, 1)) / 2
+        return out * edge_norm.view(-1, 1)
 
     def update(self, aggr_out, x):
         if self.root is not None:

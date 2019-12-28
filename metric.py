@@ -50,6 +50,118 @@ def sort_and_rank(scores, target):
     return indices
 
 
+def calc_metric(ranks_s, ranks_o, hits=[1, 3, 10]):
+    """calculate mean reciprocal rank and hit@n using rank of every triplet
+
+    Args:
+        ranks_s: ([int]) rank of test triplet whose subject was replaced
+        ranks_o: ([int]) rank of test triplet whose object was replaced
+    Return:
+        metric: (dict) predicted metrics
+    """
+    # begin to compute mrr and hit@n using ranks
+    metrics = {}
+    ranks = torch.cat([torch.tensor(ranks_s), torch.tensor(ranks_o)]) + 1  # change to 1-indexed
+
+    metrics['mrr'] = torch.mean(1.0 / ranks.float()).item()
+
+    for hit in hits:
+        avg_count = torch.mean((ranks <= hit).float())
+        metrics['hits@{}'.format(hit)] = avg_count.item()
+
+    return metrics
+
+
+def calc_rank(entity, relation, test_triplet, all_triplets):
+    """Calculate ranks for one test triplet
+
+    Args:
+        entity: (torch.Tensor) entity embeddings
+        relation: (torch.Tensor) relation embeddings
+        test_triplet: (torch.Tensor) one test triplet
+        all_triplets: (torch.Tensor) all valid triplets
+    Return:
+        rank_o: (int) rank when perturbing object
+        rank_s: (int) rank when perturbing subject
+    """
+    # Perturb object firstly
+    sub, rel, obj = test_triplet[0], test_triplet[1], test_triplet[2]
+
+    # generate filtered tail entities for replacement
+    # find triplets which have the same subject_relation with current triplet
+    subject_relation = test_triplet[:2]
+    delete_indices = torch.sum(all_triplets[:, :2] == subject_relation, dim=1)
+    delete_indices = torch.nonzero(delete_indices == 2).squeeze()
+
+    # using delete_indices to get all valid tail entities in those triplets
+    delete_entity_ids = all_triplets[delete_indices, 2].view(-1).numpy()
+    perturb_entity_ids = np.setdiff1d(np.arange(entity.size(0), dtype=np.int64), np.unique(delete_entity_ids))
+    perturb_entity_ids = torch.from_numpy(perturb_entity_ids)
+    # add the current test triplet
+    perturb_entity_ids = torch.cat((perturb_entity_ids, obj.view(-1)))
+
+    # generate new triplets for scoring
+    corrupted_triplets = torch.cat(
+        (
+            sub * torch.ones_like(perturb_entity_ids).view(-1, 1),
+            rel * torch.ones_like(perturb_entity_ids).view(-1, 1),
+            perturb_entity_ids.view(-1, 1)
+        ),
+        dim=1
+    )
+
+    # calculate scores for all corrupted triplets
+    # product = entity[sub] * relation[rel]
+    # product = product.view(-1, 1, 1)
+
+    # perurb_obj_emb = entity[perturb_entity_ids].transpose(0, 1).unsqueeze(1)
+
+    # out_prod = torch.bmm(product, perurb_obj_emb)
+
+    # scores = torch.sigmoid(torch.sum(out_prod, dim = 0))
+    scores = score_func(entity, relation, corrupted_triplets)
+
+    target = torch.tensor(len(perturb_entity_ids) - 1)
+    rank_o = sort_and_rank(scores, target)
+
+    # Then, perturb subjects
+    relation_object = torch.tensor([rel, obj])
+    delete_indices = torch.sum(all_triplets[:, 1:3] == relation_object, dim=1)
+    delete_indices = torch.nonzero(delete_indices == 2).squeeze()
+
+    delete_entity_ids = all_triplets[delete_indices, 0].view(-1).numpy()
+    perturb_entity_ids = np.setdiff1d(np.arange(entity.size(0), dtype=np.int64), np.unique(delete_entity_ids))
+    perturb_entity_ids = torch.from_numpy(perturb_entity_ids)
+    # add the current test triplet
+    perturb_entity_ids = torch.cat((perturb_entity_ids, sub.view(-1)))
+
+    # generate new triplets for scoring
+    corrupted_triplets = torch.cat(
+        (
+            perturb_entity_ids.view(-1, 1),
+            rel * torch.ones_like(perturb_entity_ids).view(-1, 1),
+            obj * torch.ones_like(perturb_entity_ids).view(-1, 1),
+        ),
+        dim=1
+    )
+
+    # calculate scores for all corrupted triplets
+    # product = entity[obj] * relation[rel]
+    # product = product.view(-1, 1, 1)
+
+    # perurb_sub_emb = entity[perturb_entity_ids].transpose(0, 1).unsqueeze(1)
+
+    # out_prod = torch.bmm(product, perurb_sub_emb)
+
+    # scores = torch.sigmoid(torch.sum(out_prod, dim = 0))
+    scores = score_func(entity, relation, corrupted_triplets)
+
+    target = torch.tensor(len(perturb_entity_ids) - 1)
+    rank_s = sort_and_rank(scores, target)
+
+    return rank_o, rank_s
+
+
 def calc_mrr(entity, relation, test_triplets, all_triplets, hits=[]):
     """Calculate MRR (filtered) and Hits @ (1, 3, 10)
 
@@ -79,89 +191,9 @@ def calc_mrr(entity, relation, test_triplets, all_triplets, hits=[]):
 
     for test_triplet in tqdm(test_triplets):
 
-        # Perturb object firstly
-        sub, rel, obj = test_triplet[0], test_triplet[1], test_triplet[2]
+        rank_o, rank_s = calc_rank(entity, relation, test_triplet, all_triplets)
+        ranks_o.append(rank_o)
+        ranks_s.append(rank_s)
 
-        # generate filtered tail entities for replacement
-        # find triplets which have the same subject_relation with current triplet
-        subject_relation = test_triplet[:2]
-        delete_indices = torch.sum(all_triplets[:, :2] == subject_relation, dim=1)
-        delete_indices = torch.nonzero(delete_indices == 2).squeeze()
-
-        # using delete_indices to get all valid tail entities in those triplets
-        delete_entity_ids = all_triplets[delete_indices, 2].view(-1).numpy()
-        perturb_entity_ids = np.setdiff1d(np.arange(entity.size(0), dtype=np.int64), np.unique(delete_entity_ids))
-        perturb_entity_ids = torch.from_numpy(perturb_entity_ids)
-        # add the current test triplet
-        perturb_entity_ids = torch.cat((perturb_entity_ids, obj.view(-1)))
-
-        # generate new triplets for scoring
-        corrupted_triplets = torch.cat(
-            (
-                sub * torch.ones_like(perturb_entity_ids).view(-1, 1),
-                rel * torch.ones_like(perturb_entity_ids).view(-1, 1),
-                perturb_entity_ids.view(-1, 1)
-            ),
-            dim=1
-        )
-
-        # calculate scores for all corrupted triplets
-        # product = entity[sub] * relation[rel]
-        # product = product.view(-1, 1, 1)
-
-        # perurb_obj_emb = entity[perturb_entity_ids].transpose(0, 1).unsqueeze(1)
-            
-        # out_prod = torch.bmm(product, perurb_obj_emb)
-
-        # scores = torch.sigmoid(torch.sum(out_prod, dim = 0))
-        scores = score_func(entity, relation, corrupted_triplets)
-            
-        target = torch.tensor(len(perturb_entity_ids) - 1)
-        ranks_o.append(sort_and_rank(scores, target))
-
-        # Then, perturb subjects
-        relation_object = torch.tensor([rel, obj])
-        delete_indices = torch.sum(all_triplets[:, 1:3] == relation_object, dim=1)
-        delete_indices = torch.nonzero(delete_indices == 2).squeeze()
-
-        delete_entity_ids = all_triplets[delete_indices, 0].view(-1).numpy()
-        perturb_entity_ids = np.setdiff1d(np.arange(entity.size(0), dtype=np.int64), np.unique(delete_entity_ids))
-        perturb_entity_ids = torch.from_numpy(perturb_entity_ids)
-        # add the current test triplet
-        perturb_entity_ids = torch.cat((perturb_entity_ids, sub.view(-1)))
-
-        # generate new triplets for scoring
-        corrupted_triplets = torch.cat(
-            (
-                perturb_entity_ids.view(-1, 1),
-                rel * torch.ones_like(perturb_entity_ids).view(-1, 1),
-                obj * torch.ones_like(perturb_entity_ids).view(-1, 1),
-            ),
-            dim=1
-        )
-
-        # calculate scores for all corrupted triplets
-        # product = entity[obj] * relation[rel]
-        # product = product.view(-1, 1, 1)
-
-        # perurb_sub_emb = entity[perturb_entity_ids].transpose(0, 1).unsqueeze(1)
-            
-        # out_prod = torch.bmm(product, perurb_sub_emb)
-
-        # scores = torch.sigmoid(torch.sum(out_prod, dim = 0))
-        scores = score_func(entity, relation, corrupted_triplets)
-            
-        target = torch.tensor(len(perturb_entity_ids) - 1)
-        ranks_s.append(sort_and_rank(scores, target))
-
-    # begin to compute mrr and hit@n using ranks
-    metrics = {}
-    ranks = torch.cat([torch.tensor(ranks_s), torch.tensor(ranks_o)]) + 1  # change to 1-indexed
-
-    metrics['mrr'] = torch.mean(1.0 / ranks.float()).item()
-
-    for hit in hits:
-        avg_count = torch.mean((ranks <= hit).float())
-        metrics['hits@{}'.format(hit)] = avg_count.item()
-
+    metrics = calc_metric(ranks_s, ranks_o, hits)
     return metrics

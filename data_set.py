@@ -18,7 +18,6 @@ import logging
 
 import numpy as np
 from torch.utils import data
-from torch_geometric.data import Data
 
 
 class DataSet(data.Dataset):
@@ -57,7 +56,7 @@ class DataSet(data.Dataset):
 
         if os.path.exists(os.path.join(self.data_dir, 'relation2vec.txt')):
             self.pretrain_relation = self._load_pretrained_emb(os.path.join(self.data_dir, 'relation2vec.txt'))
-        
+
         self.num_entity = len(self.entity2id)
         self.num_relation = len(self.relation2id)
 

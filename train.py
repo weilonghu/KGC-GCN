@@ -24,10 +24,8 @@ parser.add_argument('--restore_dir', default=None,
                     help="Optional, name of the directory containing weights to reload before training, e.g., 'experiments'")
 parser.add_argument('--multi_gpu', default=False, action='store_true',
                     help="Whether to use multiple GPUs if available")
-parser.add_argument('--loader_type', default=0, type=int,
-                    help="0: one graph and one batch in each epoch;\
-                          1: torch_geometric.data.NeighborSampler, can generate n-hops graph;\
-                          2: torch.utils.data.DataLoader, split dataset to n batches and generate n graphs")
+parser.add_argument('--sampler_type', default='uniform', type=str,
+                    help="uniform, batch, neighbor_node or neighbor_edge")
 
 
 def train(model, loader, optimizer, params):
@@ -74,25 +72,15 @@ def train_and_evaluate(model, data_manager, optimizer, scheduler, params, model_
     patience_counter = 0
 
     # evaluation triplet and graph
-    eval_triplets = data_manager.fetch_triplets('test')
-    all_triplets = data_manager.all_triplets()
+    eval_triplets = torch.from_numpy(data_manager.fetch_triplets('val'))
+    all_triplets = torch.from_numpy(data_manager.all_triplets())
     test_graph = data_manager.build_test_graph()
-
-    # build graph using training set
-    if args.loader_type == 2:
-        loader = data_manager.data_iterator(batch_size=params.batch_size, shuffle=True)
-    elif args.loader_type == 1:
-        neighbor_sampler_size = [int(size) for size in params.sampler_size.split()]
-        loader = data_manager.neighbor_sampler(batch_size=params.batch_size,
-                                               shuffle=True,
-                                               size=neighbor_sampler_size,
-                                               num_hops=params.sampler_num_hops)
 
     epoches = trange(params.epoch_num)
     for epoch in epoches:
         # train for one epoch on training set
-        if args.loader_type == 0:
-            loader = [data_manager.build_train_graph()]
+        loader = data_manager.get_data_loader(args.sampler_type, params)
+
         loss, acc = train(model, loader, optimizer, params)
 
         scheduler.step()

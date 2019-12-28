@@ -4,8 +4,6 @@ import torch.nn.functional as F
 from torch_geometric.nn.conv import MessagePassing
 from torch_geometric.utils import softmax
 
-from utils import uniform
-
 
 class MGCN(torch.nn.Module):
     """ Model using global and local relation embeddings for multi-graph knowledge graph embedding
@@ -162,16 +160,15 @@ class MGCNConv(MessagePassing):
                               edge_norm=edge_norm)
 
     def message(self, x_i, x_j, edge_index_i, edge_index_j, edge_index, edge_type, edge_norm):
-        # alpha = (x_i * self.weight * x_j).sum(dim=1)
-        # alpha = softmax(alpha, edge_index_i, edge_index_i.size(0))
+        alpha = (x_i * self.weight * x_j).sum(dim=1)
+        alpha = softmax(alpha, edge_index_i, edge_index_i.size(0))
 
         w = torch.matmul(self.att, self.basis.view(self.num_bases, -1))
         w = w.view(self.num_relations, self.in_channels, self.out_channels)
         w = torch.index_select(w, 0, edge_type)
         out = torch.bmm(x_j.unsqueeze(1), w).squeeze(-2)
 
-        # return (out * edge_norm.view(-1, 1) + out * alpha.view(-1, 1)) / 2
-        return out * edge_norm.view(-1, 1)
+        return (out * edge_norm.view(-1, 1) + out * alpha.view(-1, 1)) / 2
 
     def update(self, aggr_out, x):
         if self.root is not None:

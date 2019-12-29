@@ -61,54 +61,57 @@ def train(model, loader, optimizer, params):
 
 def train_and_evaluate(model, data_manager, optimizer, scheduler, params, model_dir, restore_dir):
     """Train the model and evaluate every epoch"""
-    # reload weights from restore_dir if specified
-    if restore_dir is not None:
-        utils.load_checkpoint(os.path.join(restore_dir, 'last.ckpt'), model)
-        logging.info('Restore model from {}'.format(os.path.join(restore_dir, 'last.ckpt')))
 
     # main evaluation criteria
     best_measure = 0
     # early stopping
     patience_counter = 0
 
+    # reload weights from restore_dir if specified
+    if restore_dir is not None:
+        best_measure = utils.load_checkpoint(os.path.join(restore_dir, 'last.ckpt'), model)
+        logging.info('Restore model from {} with best measure: {}'.format(os.path.join(restore_dir, 'last.ckpt'), best_measure))
+
     # evaluation triplet and graph
-    eval_triplets = torch.from_numpy(data_manager.fetch_triplets('val'))
+    eval_triplets = torch.from_numpy(data_manager.fetch_triplets('val', size=0.5))
     all_triplets = torch.from_numpy(data_manager.all_triplets())
     test_graph = data_manager.build_test_graph()
+    logging.info('Sample {} triplets for evaluation'.format(eval_triplets.size(0)))
 
-    epoches = trange(params.epoch_num)
-    for epoch in epoches:
-        # train for one epoch on training set
-        loader = data_manager.get_data_loader(args.sampler_type, params)
+    logging.info('\nStarting training for {} epoch(s)'.format(params.epoch_num))
 
-        loss, acc = train(model, loader, optimizer, params)
+    with trange(params.epoch_num, desc='Train') as bar:
+        for epoch in bar:
+            # train for one epoch on training set
+            loader = data_manager.get_data_loader(args.sampler_type, params)
 
-        scheduler.step()
+            loss, acc = train(model, loader, optimizer, params)
 
-        epoches.set_postfix(loss='{:05.3f}'.format(loss), acc='{:05.3f}'.format(acc))
+            scheduler.step()
 
-        if (epoch + 1) % params.eval_every == 0:
-            val_metrics = evaluate(model, test_graph, eval_triplets, all_triplets, params, mark='Val')
-            val_measure = val_metrics['measure']
-            improve_measure = val_measure - best_measure
-            if improve_measure > 0:
-                logging.info('- Found new best measure')
-                best_measure = val_measure
-                state = {'state_dict': model.state_dict(
-                ), 'optim_dict': optimizer.state_dict()}
-                utils.save_checkpoint(state, is_best=False,
-                                      checkpoint_dir=model_dir)
-                if improve_measure < params.patience:
-                    patience_counter += 1
+            bar.set_postfix(loss='{:05.3f}'.format(loss), acc='{:05.3f}'.format(acc))
+
+            if (epoch + 1) % params.eval_every == 0:
+                val_metrics = evaluate(model, test_graph, eval_triplets, all_triplets, params, mark='Val')
+                val_measure = val_metrics['measure']
+                improve_measure = val_measure - best_measure
+                if improve_measure > 0:
+                    best_measure = val_measure
+                    state = {'state_dict': model.state_dict(),
+                             'optim_dict': optimizer.state_dict(),
+                             'measure': best_measure}
+                    utils.save_checkpoint(state, is_best=False, checkpoint_dir=model_dir)
+                    if improve_measure < params.patience:
+                        patience_counter += 1
+                    else:
+                        patience_counter = 0
                 else:
-                    patience_counter = 0
-            else:
-                patience_counter += 1
+                    patience_counter += 1
 
-            # early stopping and logging best measure
-            if (patience_counter >= params.patience_num and epoch > params.min_epoch_num) or epoch == params.epoch_num:
-                logging.info("Best val measure: {:05.2f}".format(best_measure))
-                break
+                # early stopping and logging best measure
+                if (patience_counter >= params.patience_num and epoch > params.min_epoch_num) or epoch == params.epoch_num:
+                    logging.info("Early stopping with best val measure: {:05.2f}".format(best_measure))
+                    break
 
 
 if __name__ == '__main__':
@@ -165,6 +168,5 @@ if __name__ == '__main__':
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.9, last_epoch=-1)
 
     # train and evaluate the model
-    logging.info('Starting training for {} epoch(s)'.format(params.epoch_num))
     train_and_evaluate(model, data_manager, optimizer, scheduler,
                        params, model_dir, args.restore_dir)

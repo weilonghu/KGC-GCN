@@ -66,6 +66,7 @@ class MakeIter(object):
     def __init__(self, generator_func, **kwargs):
         self.generator_func = generator_func
         self.kwargs = kwargs
+
     def __iter__(self):
         return self.generator_func(**self.kwargs)
 
@@ -74,23 +75,6 @@ def uniform(size, tensor):
     bound = 6.0 / math.sqrt(size)
     if tensor is not None:
         tensor.data.uniform_(-bound, bound)
-
-
-def indexing(table, ids):
-    """Lookup index in 'table' for each id in 'ids'
-    Example:
-        table: [1, 3, 5, 9, 8]
-        ids: [1, 1, 5, 3, 8]
-        return: [0, 0, 2, 1, 4]
-    Args:
-        table: all posible ids
-        ids: need to lookup
-    Return:
-        indices: indices of 'ids' in 'table'
-    """
-    one_hot = (ids.view(-1, 1) == table)
-    indices = (one_hot == True).nonzero()[:, 1]
-    return indices
 
 
 def multiprocess_setting():
@@ -161,4 +145,4 @@ def load_checkpoint(checkpoint, model, optimizer=None):
     if optimizer:
         optimizer.load_state_dict(checkpoint['optim_dict'])
 
-    return checkpoint
+    return checkpoint.get('measure', None)

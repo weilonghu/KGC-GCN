@@ -1,6 +1,7 @@
 """
-Calculate metrics for knowledge graph representation and use multi-processing for accelerating.
-Be care for the termination of the sub-processes. For example, the CTRL+C signal.
+Calculate metrics for knowledge graph representation.
+In order to fasten the training process, we calculate raw mrr and hits@n
+to select the best model, and then calculate filterd metrics on test dataset.
 """
 
 import torch
@@ -51,7 +52,7 @@ def sort_and_rank(scores, target):
 
 
 def calc_metric(ranks_s, ranks_o, hits=[1, 3, 10]):
-    """calculate mean reciprocal rank and hit@n using rank of every triplet
+    """calculate mean reciprocal rank and hits@n using rank of every triplet
 
     Args:
         ranks_s: ([int]) rank of test triplet whose subject was replaced
@@ -59,7 +60,7 @@ def calc_metric(ranks_s, ranks_o, hits=[1, 3, 10]):
     Return:
         metric: (dict) predicted metrics
     """
-    # begin to compute mrr and hit@n using ranks
+    # begin to compute mrr and hits@n using ranks
     metrics = {}
     ranks = torch.cat([torch.tensor(ranks_s), torch.tensor(ranks_o)]) + 1  # change to 1-indexed
 
@@ -180,7 +181,7 @@ def calc_mrr(entity, relation, test_triplets, all_triplets, hits=[]):
         test_triplets: (2-d array) triplets in test set
         all_triplets: (2-d array) triplets in train, valid and test set
         hits: (list) [1, 3, 10]
-
+        filtered: (bool) filtered metrics or raw metrics
     Return:
         metrics: (dict) including mrr and hits@n
     """
@@ -189,7 +190,7 @@ def calc_mrr(entity, relation, test_triplets, all_triplets, hits=[]):
     ranks_s = []
     ranks_o = []
 
-    for test_triplet in tqdm(test_triplets):
+    for test_triplet in tqdm(test_triplets, desc='Eval'):
 
         rank_o, rank_s = calc_rank(entity, relation, test_triplet, all_triplets)
         ranks_o.append(rank_o)

@@ -64,7 +64,7 @@ class DataManager(object):
         all_triplets = self.data_set.total_triplets()
         return all_triplets
 
-    def fetch_triplets(self, data_type):
+    def fetch_triplets(self, data_type, size=1):
         """Get triplets accordding to 'data_type'
 
         Args:
@@ -74,7 +74,12 @@ class DataManager(object):
         """
         assert data_type in ['train', 'val', 'test'], 'Invalid data type'
 
-        return self.data_set.triplets[data_type]
+        triplets = self.data_set.triplets[data_type]
+        if size == 1:
+            return triplets
+        else:
+            edges = self._sample_edge_uniform(len(triplets), int(size * len(triplets)))
+            return triplets[edges]
 
     # =====================================================================
     # Utility functions only used in this class
@@ -254,7 +259,7 @@ class DataManager(object):
 
         return edges
 
-    def _sample_edge_uniform(self, n_triplets: int, sample_size: int):
+    def _sample_edge_uniform(self, n_triplets, sample_size):
         """Sample edges uniformly from all the edges."""
         all_edges = np.arange(n_triplets)
         return np.random.choice(all_edges, sample_size, replace=False)

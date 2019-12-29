@@ -6,6 +6,7 @@ import logging
 import os
 
 import torch
+from tqdm import tqdm
 
 import utils
 from model import MGCN
@@ -43,7 +44,7 @@ def evaluate(model, test_graph, eval_triplets, all_triplets, params, mark='Eval'
     metrics['measure'] = metrics['mrr']
     metrics_str = "; ".join("{}: {:05.2f}".format(k, v)
                             for k, v in metrics.items())
-    logging.info("- {} metrics: {}  ".format(mark, metrics_str))
+    tqdm.write("- {} metrics: {}  ".format(mark, metrics_str))
 
     return metrics
 
@@ -87,7 +88,8 @@ if __name__ == '__main__':
     # prepare model
     model = MGCN(dataset.n_entity, dataset.num_relations,
                  params)
-    utils.load_checkpoint(os.path.join(model_dir, 'last.ckpt'), model)
+    best_measure = utils.load_checkpoint(os.path.join(model_dir, 'last.ckpt'), model)
+    logging.info('Restore model from {} with best measure: {}'.format(os.path.join(model_dir, 'last.ckpt'), best_measure))
     model.to(params.device)
 
     if params.n_gpu > 1 and args.multi_gpu:

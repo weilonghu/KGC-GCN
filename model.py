@@ -15,15 +15,15 @@ class MGCN(torch.nn.Module):
     def __init__(self, num_entities, num_relations, params):
         super(MGCN, self).__init__()
 
-        self.entity_embedding = nn.Embedding(num_entities, 100)
-        self.relation_embedding = nn.Parameter(torch.Tensor(num_relations, 100))
+        self.entity_embedding = nn.Embedding(num_entities, params.emb_dim)
+        self.relation_embedding = nn.Parameter(torch.Tensor(num_relations, params.emb_dim))
 
         nn.init.xavier_uniform_(self.relation_embedding, gain=nn.init.calculate_gain('relu'))
 
         self.conv1 = MGCNConv(
-            100, 100, num_relations * 2, num_bases=64)
+            params.emb_dim, params.emb_dim, num_relations * 2, num_bases=64)
         self.conv2 = MGCNConv(
-            100, 100, num_relations * 2, num_bases=64)
+            params.emb_dim, params.emb_dim, num_relations * 2, num_bases=64)
 
         self.dropout_ratio = params.dropout
         self.regularization = params.regularization

@@ -1,0 +1,1 @@
+g++ -fPIC -shared -o libsampler.so lib.cpp

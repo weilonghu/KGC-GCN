@@ -26,6 +26,8 @@ parser.add_argument('--multi_gpu', default=False, action='store_true',
                     help="Whether to use multiple GPUs if available")
 parser.add_argument('--sampler_type', default='uniform', type=str,
                     help="uniform, batch, neighbor_node or neighbor_edge")
+parser.add_argument('--lib_path', default='cpp/libsampler.so', type=str,
+                    help='C library path')
 
 
 def train(model, loader, optimizer, params):
@@ -146,6 +148,7 @@ if __name__ == '__main__':
 
     # create dataset and normalize
     logging.info('Loading the dataset...')
+    params.lib_path = args.lib_path
     data_manager = DataManager(args.dataset, params)
 
     # prepare model

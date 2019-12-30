@@ -25,6 +25,7 @@ from torch_geometric.utils import remove_isolated_nodes
 
 from data_set import DataSet
 from utils import MakeIter
+from py_c import CPPLib
 
 
 class DataManager(object):
@@ -58,6 +59,7 @@ class DataManager(object):
             logging.info('Pretrained embeddings not found')
 
         self.data_loader = None
+        self.c_lib = CPPLib(params.lib_path)
 
     def all_triplets(self):
         """Get all triplets for evaluation"""
@@ -200,65 +202,6 @@ class DataManager(object):
 
         return edge_norm
 
-    def _get_adj_and_degrees(self, num_nodes, triplets):
-        """ Get adjacency list and degrees of the graph"""
-        adj_list = [[] for _ in range(num_nodes)]
-        for i, triplet in enumerate(triplets):
-            adj_list[triplet[0]].append([i, triplet[2]])
-            adj_list[triplet[2]].append([i, triplet[0]])
-
-        degrees = np.array([len(a) for a in adj_list])
-        adj_list = [np.array(a) for a in adj_list]
-        return adj_list, degrees
-
-    def _sample_edge_neighborhood(self, n_triplets, sample_size):
-        """Sample edges by neighborhool expansion.
-        This guarantees that the sampled edges form a connected graph, which
-        may help deeper GNNs that require information from more than one hop.
-
-        Args:
-            n_triplets: (int) total number of triplets to be sampled
-            sample_size: (int) the number of edges to be sampled
-        Return:
-            edges: (np.ndarray) sampled edge indices
-        """
-        edges = np.zeros((sample_size), dtype=np.int32)
-
-        # initialize
-        sample_counts = np.array([d for d in self.degrees])
-        picked = np.array([False for _ in range(n_triplets)])
-        seen = np.array([False for _ in self.degrees])
-
-        for i in range(0, sample_size):
-            weights = sample_counts * seen
-
-            if np.sum(weights) == 0:
-                weights = np.ones_like(weights)
-                weights[np.where(sample_counts == 0)] = 0
-
-            probabilities = (weights) / np.sum(weights)
-            chosen_vertex = np.random.choice(np.arange(self.degrees.shape[0]), p=probabilities)
-            chosen_adj_list = self.adj_list[chosen_vertex]
-            seen[chosen_vertex] = True
-
-            chosen_edge = np.random.choice(np.arange(chosen_adj_list.shape[0]))
-            chosen_edge = chosen_adj_list[chosen_edge]
-            edge_number = chosen_edge[0]
-
-            while picked[edge_number]:
-                chosen_edge = np.random.choice(np.arange(chosen_adj_list.shape[0]))
-                chosen_edge = chosen_adj_list[chosen_edge]
-                edge_number = chosen_edge[0]
-
-            edges[i] = edge_number
-            other_vertex = chosen_edge[1]
-            picked[edge_number] = True
-            sample_counts[chosen_vertex] -= 1
-            sample_counts[other_vertex] -= 1
-            seen[other_vertex] = True
-
-        return edges
-
     def _sample_edge_uniform(self, n_triplets, sample_size):
         """Sample edges uniformly from all the edges."""
         all_edges = np.arange(n_triplets)
@@ -276,7 +219,7 @@ class DataManager(object):
         if sampler_type == 'uniform':
             edges = self._sample_edge_uniform(len(train_triplets), self.batch_size)
         elif sampler_type == 'neighbor_edge':
-            edges = self._sample_edge_neighborhood(len(train_triplets), self.batch_size)
+            edges = self.c_lib.neighbor_edge_sample(self.batch_size)
         else:
             raise ValueError('Sampler type must be uniform or neighbor_edge')
 
@@ -284,6 +227,8 @@ class DataManager(object):
 
     def build_test_graph(self):
         src, rel, dst = self.fetch_triplets('train').transpose()
+
+        self.c_lib.build_graph(src, rel, dst, self.num_entity, src.shape[0])
 
         data = self._build_graph_from_triplets(np.arange(self.num_entity), src, rel, dst)
 

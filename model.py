@@ -161,7 +161,8 @@ class MGCNConv(MessagePassing):
 
     def message(self, x_i, x_j, edge_index_i, edge_index_j, edge_index, edge_type, edge_norm):
         alpha = (x_i * self.weight * x_j).sum(dim=1)
-        alpha = softmax(alpha, edge_index_i, edge_index_i.size(0))
+        _, unique_edge_index_i = torch.unique(edge_index_i, return_inverse=True)
+        alpha = softmax(alpha, unique_edge_index_i, edge_index_i.size(0))
 
         w = torch.matmul(self.att, self.basis.view(self.num_bases, -1))
         w = w.view(self.num_relations, self.in_channels, self.out_channels)

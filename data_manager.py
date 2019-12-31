@@ -13,19 +13,13 @@ Evary DataLoader must can be iterable. So the every epoch, we can use following 
         ......
 """
 
-import logging
-
 import torch
 import numpy as np
-from torch.utils.data import DataLoader
 from torch_geometric.data import Data
-from torch_geometric.data import NeighborSampler
 from torch_scatter import scatter_add
-from torch_geometric.utils import remove_isolated_nodes
+from torch_geometric.utils import degree
 
 from data_set import DataSet
-from utils import MakeIter
-from py_c import CPPLib
 
 
 class DataManager(object):
@@ -42,24 +36,11 @@ class DataManager(object):
         self.negative_rate = params.negative_rate
         self.batch_size = params.batch_size
         self.bi_directional = params.bi_directional
-        self.num_worker = params.num_worker
 
         self.num_entity = self.data_set.num_entity
         self.num_relation = self.data_set.num_relation
 
-        self.adj_list, self.degrees = self._get_adj_and_degrees(
-            num_nodes=self.num_entity,
-            triplets=self.fetch_triplets('train')
-        )
-
-        try:
-            self.pretrained_entity = torch.from_numpy(self.data_set.pretrain_entity)
-            self.pretrained_relation = torch.from_numpy(self.data_set.pretrain_relation)
-        except AttributeError:
-            logging.info('Pretrained embeddings not found')
-
-        self.data_loader = None
-        self.c_lib = CPPLib(params.lib_path)
+        self.edge_sampler = Sampler(self.fetch_triplets('train'), self.num_entity, self.fetch_triplets('train').shape[0])
 
     def all_triplets(self):
         """Get all triplets for evaluation"""
@@ -80,25 +61,12 @@ class DataManager(object):
         if size == 1:
             return triplets
         else:
-            edges = self._sample_edge_uniform(len(triplets), int(size * len(triplets)))
+            edges = np.random.choice(np.arange(triplets.shape[0]), size=int(size * triplets.shape[0]), replace=True)
             return triplets[edges]
 
     # =====================================================================
     # Utility functions only used in this class
     # =====================================================================
-
-    def _self_collate_fn(self, batch: list):
-        """Perform negative sampling and create sub-graph
-
-        Args:
-            batch: ([numpy.ndarray])
-        Return:
-            torch_geometric.data.Data
-        """
-        train_triplets = self.fetch_triplets('train').numpy()
-        edges = np.array(batch)
-
-        return self._generate_sampled_graph_and_labels(train_triplets[edges])
 
     def _generate_sampled_graph_and_labels(self, edges):
         """Get training graph and signals, Fisrt perform edge neiborhood sampling on grapph,
@@ -123,14 +91,14 @@ class DataManager(object):
         graph_split_ids = np.random.choice(np.arange(src.shape[0]), size=split_size, replace=False)
         src, rel, dst = src[graph_split_ids], rel[graph_split_ids], dst[graph_split_ids]
 
-        data = self._build_graph_from_triplets(uniq_entity, src, rel, dst)
+        data = self._build_graph_from_triplets(uniq_entity, src, rel, dst, self.bi_directional)
 
         data.samples = torch.from_numpy(samples)
         data.labels = torch.from_numpy(labels)
 
         return data
 
-    def _build_graph_from_triplets(self, graph_nodes, src, rel, dst):
+    def _build_graph_from_triplets(self, graph_nodes, src, rel, dst, bi_directional=False):
         """Create a graph give triplets consists of 'src', 'rel' and 'dst'
 
         Args:
@@ -140,7 +108,7 @@ class DataManager(object):
             torch_geometric.data.Data
         """
         # Create bi-directional graph
-        if self.bi_directional is True:
+        if bi_directional is True:
             src, dst = np.concatenate((src, dst)), np.concatenate((dst, src))
             rel = np.concatenate((rel, rel + self.num_relation))
 
@@ -202,137 +170,74 @@ class DataManager(object):
 
         return edge_norm
 
-    def _sample_edge_uniform(self, n_triplets, sample_size):
-        """Sample edges uniformly from all the edges."""
-        all_edges = np.arange(n_triplets)
-        return np.random.choice(all_edges, sample_size, replace=False)
-
     # ===============================================================================
-    # Utility function for building training and testing graphs or create DataLoader
+    # Utility function for building training and testing graphs
     # ===============================================================================
 
-    def build_train_graph(self, sampler_type):
+    def build_train_graph(self, method):
         """Build train graph, only one batch"""
 
         train_triplets = self.fetch_triplets('train')
-
-        if sampler_type == 'uniform':
-            edges = self._sample_edge_uniform(len(train_triplets), self.batch_size)
-        elif sampler_type == 'neighbor_edge':
-            edges = self.c_lib.neighbor_edge_sample(self.batch_size)
-        else:
-            raise ValueError('Sampler type must be uniform or neighbor_edge')
+        edges = self.edge_sampler(method, self.batch_size)
 
         return self._generate_sampled_graph_and_labels(train_triplets[edges])
 
     def build_test_graph(self):
         src, rel, dst = self.fetch_triplets('train').transpose()
 
-        self.c_lib.build_graph(src, rel, dst, self.num_entity, src.shape[0])
-
-        data = self._build_graph_from_triplets(np.arange(self.num_entity), src, rel, dst)
+        data = self._build_graph_from_triplets(np.arange(self.num_entity), src, rel, dst, self.bi_directional)
 
         return data
 
-    def batch_loader(self, batch_size, shuffle=True, drop_last=False):
-        """Create a pytorch DataLoader object"""
+    def get_data_loader(self, sampler_method):
 
-        # zero worker when remote development
-        # method = os.environ.get('MULTIPROCESS_METHOD', None)
-        num_workers = self.num_worker
-        return DataLoader(self.data_set,
-                          batch_size=batch_size,
-                          shuffle=shuffle,
-                          collate_fn=self._self_collate_fn,
-                          num_workers=num_workers,
-                          drop_last=drop_last)
+        data = self.build_train_graph(sampler_method)
 
-    def neighbor_node_loader(self, batch_size, size=1, shuffle=True, num_hops=1, drop_last=True):
-        """The neighbor sampler from the “Inductive Representation Learning on Large Graphs” paper implemented by torch_geometric
+        return iter([data])
 
-        Args:
-            size: (int or [int]) The number of neighbors to sample (for each layer)
-            num_hops: (int) The number of layers to sample
-        Return:
-            torch_geometric.data.Data object.
-        """
-        # create graph
-        src, rel, dst = self.fetch_triplets('train').transpose(0, 1)
 
-        edge_index = torch.stack((src, dst))
-        edge_attr = rel
+class Sampler(object):
 
-        train_data = Data(edge_index=edge_index, edge_attr=edge_attr)
-        train_data.entity = torch.from_numpy(np.arange(self.num_entity))
-        train_data.num_nodes = self.num_entity
+    def __init__(self, triplets, num_node, num_edge, K=1):
+        self.num_node = num_node
+        self.num_edge = num_edge
+        self.K = K
 
-        loader = NeighborSampler(train_data,
-                                 size=size,
-                                 num_hops=num_hops,
-                                 bipartite=False,
-                                 batch_size=batch_size,
-                                 shuffle=shuffle,
-                                 add_self_loops=False,
-                                 drop_last=drop_last)
+        self.weights = self._calculate_degrees(triplets)
+        self.counts = np.ones(num_edge)
 
-        def generator():
-            # create a generator for negative sampling and consistent interface
-            for data in loader():
-                n_id, e_id, edge_index = data.n_id, data.e_id, data.edge_index
-                # the neighborsampler first select b_ids as tail nodes, then select head nodes
-                # if one node only present at head nodes, it becomes as a isolated node
-                edge_index, rel, mask = remove_isolated_nodes(edge_index, edge_attr=train_data.edge_attr[e_id], num_nodes=n_id.size(0))
-                n_id = n_id[mask]
-                # construct batch triplets
-                src, dst = edge_index[0], edge_index[1]
-                # negtive sampling
-                pos_samples = torch.cat((src.view(-1, 1), rel.view(-1, 1), dst.view(-1, 1)), dim=1)
-                # make sure 'pos_samples' and 'neg_samples' are the same type, or they will share memory
-                samples, labels = self._negative_sampling(pos_samples.numpy(), n_id.size(0), self.negative_rate)
+        self.func_map = {
+            'uniform': self._sample_edge_uniform,
+            'weighted': self._sample_edge_weighted
+        }
 
-                # Create bi-directional graph
-                if self.bi_directional is True:
-                    src, dst = torch.cat((src, dst)), torch.cat((dst, src))
-                    rel = torch.cat((rel, rel + self.num_relation))
+    def __call__(self, method, size):
+        assert method in self.func_map, 'Unspported sampling method'
 
-                edge_index = torch.stack((src, dst))
-                edge_attr = rel
+        func = self.func_map.get(method)
+        return func(size)
 
-                n_data = Data(edge_index=edge_index, edge_attr=edge_attr)
-                n_data.entity = n_id
-                n_data.samples = torch.from_numpy(samples)
-                n_data.labels = torch.from_numpy(labels)
-                n_data.num_nodes = n_id.size(0)
-                n_data.edge_norm = self._edge_normal(edge_attr, edge_index, n_data.num_nodes, self.num_relation)
+    def _calculate_degrees(self, triplets):
+        triplets = torch.from_numpy(triplets)
+        src, rel, dst = triplets.transpose(0, 1)
+        node_degrees = degree(torch.cat((src, dst)), num_nodes=self.num_node)
+        edge_degrees = node_degrees[src] + node_degrees[dst]
 
-                yield n_data
+        return edge_degrees.numpy()
 
-        return MakeIter(generator)
+    def _sample_edge_uniform(self, size):
+        """Sample edges uniformly from all the edges."""
+        all_edges = np.arange(self.num_edge)
+        return np.random.choice(all_edges, size, replace=False)
 
-    def get_data_loader(self, sampler_type, params):
-        """Get data loader from the data_manager.
-        If the 'sampler_type' is 'batch' or 'neighbor_node', this method return the same loader in every epoch.
-        If the 'sampler_type' is 'neighbor_edge' or 'uniform', this method return a new iterable list every epoch.
+    def _sample_edge_weighted(self, size):
+        norm_weights = self.weights / np.sum(self.weights)
+        norm_counts = self.counts / np.sum(self.counts)
 
-        Args:
-            sampler_type: (string) the way to sample a sub-graph for training,
-                here are four types, 'uniform, batch, neighbor_node, neighbor_edge'
-                (default: uniform)
-        Return:
-            an iterable object
-        """
-        if sampler_type in ['uniform', 'neighbor_edge']:
-            data = self.build_train_graph(sampler_type)
-            return iter([data])
+        p = self.K * norm_weights / norm_counts
+        p = np.exp(p) / np.sum(np.exp(p))
 
-        if self.data_loader is None:
-            if sampler_type == 'batch':
-                self.data_loader = self.batch_loader(batch_size=params.batch_size, shuffle=True)
-            elif sampler_type == 'neighbor_node':
-                neighbor_sampler_size = [int(size) for size in params.sampler_size.split()]
-                self.data_loader = self.neighbor_node_loader(batch_size=params.batch_size,
-                                                             shuffle=True,
-                                                             size=neighbor_sampler_size,
-                                                             num_hops=params.sampler_num_hops)
+        edges = np.random.choice(np.arange(self.num_edge), size, replace=False, p=p)
+        self.counts[edges] += 1
 
-        return self.data_loader
+        return edges

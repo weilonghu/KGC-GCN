@@ -1,6 +1,7 @@
 r"""This file load c++ library and deal with the interface
 """
-
+import numpy as np
+import time
 from ctypes import cdll, POINTER, Array, cast
 from ctypes import c_int
 
@@ -32,7 +33,7 @@ class CPPLib:
 
         self.lib.sample_edges_c(sample_size, result)
 
-        return list(result)
+        return np.array(list(result))
 
     def check_state(self):
         return self.lib.test()
@@ -68,23 +69,24 @@ class IntArrayType:
         return param.ctypes.data_as(POINTER(c_int))
 
 
-# if __name__ == '__main__':
-#     lib = CPPLib('cpp/libsampler.so')
+if __name__ == '__main__':
+    lib = CPPLib('cpp/libsampler.so')
 
-#     state = lib.check_state()
-#     print(state)
+    state = lib.check_state()
+    print(state)
 
-#     num_node = 14000
-#     num_rels = 237
-#     num_edge = 170000
+    num_node = 14541
+    num_rels = 237
+    num_edge = 272115
+    batch_size = 30000
 
-#     src = np.random.choice(np.arange(num_node), size=num_edge)
-#     rel = np.random.choice(np.arange(num_rels), size=num_edge)
-#     dst = np.random.choice(np.arange(num_node), size=num_edge)
+    src = np.random.choice(np.arange(num_node), size=num_edge)
+    rel = np.random.choice(np.arange(num_rels), size=num_edge)
+    dst = np.random.choice(np.arange(num_node), size=num_edge)
 
-#     lib.build_graph(src, rel, dst, num_node, num_edge)
-#     edges = lib.neighbor_edge_sample(20)
-#     print(edges)
+    lib.build_graph(src, rel, dst, num_node, num_edge)
 
-#     edges = lib.neighbor_edge_sample(20)
-#     print(edges)
+    while True:
+        start = time.time()
+        edges = lib.neighbor_edge_sample(batch_size)
+        print('cost time: {} s'.format(time.time() - start))

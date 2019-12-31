@@ -51,11 +51,11 @@ class DataSet(data.Dataset):
         }
 
         # load pretrained embeddings if exist
-        if os.path.exists(os.path.join(self.data_dir, 'entity2vec.txt')):
-            self.pretrain_entity = self._load_pretrained_emb(os.path.join(self.data_dir, 'entity2vec.txt'))
+        # if os.path.exists(os.path.join(self.data_dir, 'entity2vec.txt')):
+        #     self.pretrain_entity = self._load_pretrained_emb(os.path.join(self.data_dir, 'entity2vec.txt'))
 
-        if os.path.exists(os.path.join(self.data_dir, 'relation2vec.txt')):
-            self.pretrain_relation = self._load_pretrained_emb(os.path.join(self.data_dir, 'relation2vec.txt'))
+        # if os.path.exists(os.path.join(self.data_dir, 'relation2vec.txt')):
+        #     self.pretrain_relation = self._load_pretrained_emb(os.path.join(self.data_dir, 'relation2vec.txt'))
 
         self.num_entity = len(self.entity2id)
         self.num_relation = len(self.relation2id)
@@ -114,10 +114,3 @@ class DataSet(data.Dataset):
         return np.concatenate((
             self.triplets['train'], self.triplets['val'], self.triplets['test']
         ))
-
-    def __len__(self):
-        return len(self.train_indices)
-
-    def __getitem__(self, index):
-        """Only reture the selected index"""
-        return self.train_indices[index]

@@ -24,10 +24,8 @@ parser.add_argument('--restore_dir', default=None,
                     help="Optional, name of the directory containing weights to reload before training, e.g., 'experiments'")
 parser.add_argument('--multi_gpu', default=False, action='store_true',
                     help="Whether to use multiple GPUs if available")
-parser.add_argument('--sampler_type', default='uniform', type=str,
-                    help="uniform, batch, neighbor_node or neighbor_edge")
-parser.add_argument('--lib_path', default='cpp/libsampler.so', type=str,
-                    help='C library path')
+parser.add_argument('--sampler_method', default='weighted', type=str,
+                    help="uniform sampling or neighborhood sampling")
 
 
 def train(model, loader, optimizer, params):
@@ -80,12 +78,12 @@ def train_and_evaluate(model, data_manager, optimizer, scheduler, params, model_
     test_graph = data_manager.build_test_graph()
     logging.info('Sample {} triplets for evaluation'.format(eval_triplets.size(0)))
 
-    logging.info('\nStarting training for {} epoch(s)'.format(params.epoch_num))
+    logging.info('Starting training for {} epoch(s)'.format(params.epoch_num))
 
-    with trange(params.epoch_num, desc='Train') as bar:
+    with trange(params.epoch_num, desc='Main') as bar:
         for epoch in bar:
             # train for one epoch on training set
-            loader = data_manager.get_data_loader(args.sampler_type, params)
+            loader = data_manager.get_data_loader(params.sampler_method)
 
             loss, acc = train(model, loader, optimizer, params)
 
@@ -125,6 +123,7 @@ if __name__ == '__main__':
     assert os.path.isfile(
         json_path), 'No json configuration file found at {}'.format(json_path)
     params = utils.Params(json_path)
+    params.sampler_method = args.sampler_method
 
     # set multiprocessing start method
     utils.multiprocess_setting()
@@ -148,17 +147,10 @@ if __name__ == '__main__':
 
     # create dataset and normalize
     logging.info('Loading the dataset...')
-    params.lib_path = args.lib_path
     data_manager = DataManager(args.dataset, params)
 
     # prepare model
     model = MGCN(data_manager.num_entity, data_manager.num_relation, params)
-    if params.load_pretrain:
-        try:
-            model.from_pretrained_emb(data_manager.pretrained_entity,
-                                      data_manager.pretrained_relation)
-        except AttributeError:
-            logging.info('No pretrained embeddings found')
     model.to(params.device)
 
     if params.n_gpu > 1 and args.multi_gpu:

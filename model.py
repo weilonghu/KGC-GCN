@@ -56,7 +56,6 @@ class MGCN(torch.nn.Module):
         s = embedding[triplets[:, 0]]
         r = self.relation_embedding[triplets[:, 1]]
         o = embedding[triplets[:, 2]]
-        # scores = torch.norm(s + r - o, p=self.norm, dim=1)
         scores = torch.sum(s * r * o, dim=1)
 
         return scores
@@ -71,13 +70,6 @@ class MGCN(torch.nn.Module):
         """Compute loss for the model"""
         scores = self.score_func(embedding, triplets)
 
-        # compute margin loss
-        # pos_size = scores.size(0) // (1 + self.negative_rate)
-        # pos_scores, neg_scores = scores[:pos_size], scores[pos_size:]
-        # pos_scores = pos_scores.repeat((1, self.negative_rate)).view(-1)
-        # target = torch.tensor([-1], dtype=torch.long, device=scores.device)
-        # loss = self.critetion(pos_scores, neg_scores, target)
-
         # compute cross-entropy loss
         loss = F.binary_cross_entropy_with_logits(scores, labels)
 
@@ -86,10 +78,6 @@ class MGCN(torch.nn.Module):
         pred = logits >= 0.5
         true = labels >= 0.5
         acc = torch.mean(pred.eq(true).float())
-
-        # comput accuracy based on transE
-        # pred = pos_scores < neg_scores
-        # acc = torch.mean(pred.float())
 
         loss += self.reg_loss(embedding)
 
@@ -133,7 +121,7 @@ class MGCNConv(MessagePassing):
 
         self.basis = nn.Parameter(torch.Tensor(num_bases, in_channels, out_channels))
         self.att = nn.Parameter(torch.Tensor(num_relations, num_bases))
-        self.weight = nn.Parameter(torch.Tensor(1, out_channels))
+        self.weight = nn.Parameter(torch.Tensor(num_relations, out_channels))
 
         if root_weight:
             self.root = nn.Parameter(torch.Tensor(in_channels, out_channels))
@@ -160,7 +148,7 @@ class MGCNConv(MessagePassing):
                               edge_norm=edge_norm)
 
     def message(self, x_i, x_j, edge_index_i, edge_index_j, edge_index, edge_type, edge_norm):
-        alpha = (x_i * self.weight * x_j).sum(dim=1)
+        alpha = (x_i * self.weight[edge_type] * x_j).sum(dim=1)
         _, unique_edge_index_i = torch.unique(edge_index_i, return_inverse=True)
         alpha = softmax(alpha, unique_edge_index_i, edge_index_i.size(0))
 
@@ -169,7 +157,8 @@ class MGCNConv(MessagePassing):
         w = torch.index_select(w, 0, edge_type)
         out = torch.bmm(x_j.unsqueeze(1), w).squeeze(-2)
 
-        return (out * edge_norm.view(-1, 1) + out * alpha.view(-1, 1)) / 2
+        # return (out * edge_norm.view(-1, 1) + out * alpha.view(-1, 1)) / 2
+        return out * alpha.view(-1, 1)
 
     def update(self, aggr_out, x):
         if self.root is not None:

@@ -234,7 +234,7 @@ class Sampler(object):
         norm_weights = self.weights / np.sum(self.weights)
         norm_counts = self.counts / np.sum(self.counts)
 
-        p = self.K * norm_weights / norm_counts
+        p = self.K * norm_weights / np.power(norm_counts, 1 / 2)
         p = np.exp(p) / np.sum(np.exp(p))
 
         edges = np.random.choice(np.arange(self.num_edge), size, replace=False, p=p)

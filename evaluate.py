@@ -10,12 +10,12 @@ from tqdm import tqdm
 
 import utils
 from model import MGCN
-from data_set import DataSet
+from data_manager import DataManager
 from metric import calc_mrr
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--dataset', default='wn18',
+parser.add_argument('--dataset', default='FB15k-237',
                     help="Directory containing the dataset")
 parser.add_argument('--seed', default=2019,
                     help="random seed for initialization")
@@ -42,7 +42,7 @@ def evaluate(model, test_graph, eval_triplets, all_triplets, params, mark='Eval'
 
     # logging and report
     metrics['measure'] = metrics['mrr']
-    metrics_str = "; ".join("{}: {:05.2f}".format(k, v)
+    metrics_str = "; ".join("{}: {:05.3f}".format(k, v)
                             for k, v in metrics.items())
     tqdm.write("- {} metrics: {}  ".format(mark, metrics_str))
 
@@ -55,8 +55,7 @@ if __name__ == '__main__':
     model_dir = os.path.join('experiments', args.dataset)
     # load the parameters from json file
     json_path = os.path.join(model_dir, 'params.json')
-    assert os.path.isfile(
-        json_path), 'No json configuration file found at {}'.format(json_path)
+    assert os.path.isfile(json_path), 'No json configuration file found at {}'.format(json_path)
     params = utils.Params(json_path)
 
     # set multiprocessing start method
@@ -81,13 +80,14 @@ if __name__ == '__main__':
 
     # create dataset and normalize
     logging.info('Loading the dataset...')
-
-    dataset = DataSet(args.dataset, params)
-    all_triplets = dataset.total_triplets()
+    data_manager = DataManager(args.dataset, params)
+    # evaluation triplet and graph
+    eval_triplets = torch.from_numpy(data_manager.fetch_triplets('test', size=1))
+    all_triplets = torch.from_numpy(data_manager.all_triplets())
+    test_graph = data_manager.build_test_graph()
 
     # prepare model
-    model = MGCN(dataset.n_entity, dataset.num_relations,
-                 params)
+    model = MGCN(data_manager.num_entity, data_manager.num_relation, params)
     best_measure = utils.load_checkpoint(os.path.join(model_dir, 'last.ckpt'), model)
     logging.info('Restore model from {} with best measure: {}'.format(os.path.join(model_dir, 'last.ckpt'), best_measure))
     model.to(params.device)
@@ -100,5 +100,5 @@ if __name__ == '__main__':
         model.parameters(), lr=params.learning_rate, weight_decay=params.weight_decay)
 
     # train and evaluate the model
-    logging.info('Starting training for {} epoch(s)'.format(params.epoch_num))
-    evaluate(model, dataset.test_triplets, all_triplets, params, mark='Test', verbose=True)
+    logging.info('Starting evaluation...')
+    evaluate(model, test_graph, eval_triplets, all_triplets, params, mark='Test', verbose=True)

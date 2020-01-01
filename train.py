@@ -24,7 +24,7 @@ parser.add_argument('--restore_dir', default=None,
                     help="Optional, name of the directory containing weights to reload before training, e.g., 'experiments'")
 parser.add_argument('--multi_gpu', default=False, action='store_true',
                     help="Whether to use multiple GPUs if available")
-parser.add_argument('--sampler_method', default='weighted', type=str,
+parser.add_argument('--sampler_method', default='uniform', type=str,
                     help="uniform sampling or neighborhood sampling")
 
 

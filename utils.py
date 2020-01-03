@@ -4,7 +4,6 @@ import os
 import shutil
 import torch
 import math
-import multiprocessing
 
 
 class Params():
@@ -77,13 +76,6 @@ def uniform(size, tensor):
         tensor.data.uniform_(-bound, bound)
 
 
-def multiprocess_setting():
-    """Set start method for multiprocessing"""
-    method = os.environ.get('MULTIPROCESS_METHOD', None)
-    if method is not None:
-        multiprocessing.set_start_method(method)
-
-
 def set_logger(log_path):
     """Set the logger to log info in terminal and file `log_path`.
     In general, it is useful to have a logger so that every output to the terminal is saved
@@ -107,8 +99,14 @@ def set_logger(log_path):
 
         # Logging to console
         stream_handler = logging.StreamHandler()
-        stream_handler.setFormatter(logging.Formatter('%(message)s'))
+        stream_handler.setFormatter(logging.Formatter('%(asctime)s:%(levelname)s: %(message)s'))
         logger.addHandler(stream_handler)
+
+
+def save_json(params, json_file):
+    """Save params dict to a json file"""
+    with open(json_file, 'w') as fp:
+        json.dump(params, fp)
 
 
 def save_checkpoint(state, is_best, checkpoint_dir):

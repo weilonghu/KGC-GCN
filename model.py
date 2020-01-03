@@ -2,113 +2,90 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn.conv import MessagePassing
-from torch_geometric.utils import softmax
 
 
 class MGCN(torch.nn.Module):
-    """ Model using global and local relation embeddings for multi-graph knowledge graph embedding
-    Attributes:
-        entity_embedding: resulted entity embeddings
-        relation_embedding: resulted relation embeddings, global relation embeddings
-        edge_embedding: local relation embeddings
-    """
+
     def __init__(self, num_entities, num_relations, params):
         super(MGCN, self).__init__()
 
-        self.entity_embedding = nn.Embedding(num_entities, params.emb_dim)
-        self.relation_embedding = nn.Parameter(torch.Tensor(num_relations, params.emb_dim))
+        self.dropout_ratio = params.dropout
+        self.params = params
 
+        self.entity_embedding = nn.Embedding(num_entities, params.embed_dim)
+        self.relation_embedding = nn.Embedding(num_relations, params.embed_dim)
+
+        # graph convolution
+        self.conv1 = MGCNConv(params.embed_dim, params.embed_dim, num_relations * 2, num_bases=4)
+
+        # ConvE score function
+        self.bn0 = nn.BatchNorm2d(1)
+        self.bn1 = nn.BatchNorm2d(params.num_filter)
+        self.bn2 = torch.nn.BatchNorm1d(params.embed_dim)
+
+        self.hidden_drop = torch.nn.Dropout(params.hidden_drop)
+        self.hidden_drop2 = torch.nn.Dropout(params.hidden_drop2)
+        self.feature_drop = torch.nn.Dropout(params.feat_drop)
+        self.conv_e = torch.nn.Conv2d(
+            in_channels=1,
+            out_channels=params.num_filter,
+            kernel_size=(params.kernel_size, params.kernel_size),
+            stride=1,
+            padding=0,
+            bias=params.bias
+        )
+
+        flat_sz_h = int(2 * params.k_w) - params.kernel_size + 1
+        flat_sz_w = params.k_h - params.kernel_size + 1
+        self.flat_sz = flat_sz_h * flat_sz_w * params.num_filter
+        self.fc = torch.nn.Linear(self.flat_sz, params.embed_dim)
+
+        self.register_parameter('bias', nn.Parameter(torch.zeros(num_entities)))
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
         nn.init.xavier_uniform_(self.relation_embedding, gain=nn.init.calculate_gain('relu'))
 
-        self.conv1 = MGCNConv(
-            params.emb_dim, params.emb_dim, num_relations * 2, num_bases=64)
-        self.conv2 = MGCNConv(
-            params.emb_dim, params.emb_dim, num_relations * 2, num_bases=64)
-
-        self.dropout_ratio = params.dropout
-        self.regularization = params.regularization
-
-    def forward(self, data):
-        """Encode entity in graph 'data' using graph convolutional network
-        Args:
-            data: (torch_geometric.data.Data) a graph or sub-graph of the KB.
-        Return:
-            embeddings of the entities in the graph
-        """
+    def forward(self, src, rel, data):
         entity, edge_index, edge_type, edge_norm = data.entity, data.edge_index, data.edge_attr, data.edge_norm
 
-        x = self.entity_embedding(entity)
-        # x = self.conv1(x, edge_index, edge_type, edge_norm)
-        x = F.relu(self.conv1(x, edge_index, edge_type, edge_norm))
-        x = F.dropout(x, p=self.dropout_ratio, training=self.training)
-        x = self.conv2(x, edge_index, edge_type, edge_norm)
+        # gcn
+        entity_embeddings = self.entity_embedding(entity)
+        entity_embeddings = self.conv1(entity_embeddings, edge_index, edge_type, edge_norm)
+        entity_embeddings = self.hidden_drop(entity_embeddings, training=self.training)
 
-        return x
+        # ConvE
+        src_emb, rel_emb, all_ent = entity_embeddings[src], self.relation_embedding(rel), entity_embeddings
+        src_emb = src_emb.view(-1, 1, self.params.embed_dim)
+        rel_emb = rel_emb.view(-1, 1, self.params.embed_dim)
+        stack_inp = torch.cat([src_emb, rel_emb], dim=1)
+        stack_inp = torch.transpose(stack_inp, 2, 1).view(-1, 1, 2 * self.params.k_w, self.params.k_h)
 
-    def score_func(self, embedding, triplets):
-        """Scoring each triplet in 'triplets'
-        Args:
-            embedding: (torch.FloatTensor), entity embeddings used in triplets
-            triplets: (torch.LongTensor), triplets for scoring
-        Return:
-            torch.FloatTensor, one score for each triplet
-        """
-        s = embedding[triplets[:, 0]]
-        r = self.relation_embedding[triplets[:, 1]]
-        o = embedding[triplets[:, 2]]
-        scores = torch.sum(s * r * o, dim=1)
+        x = self.bn0(stack_inp)
+        x = self.conv_e(x)
+        x = self.bn1(x)
+        x = F.relu(x)
+        x = self.feature_drop(x)
+        x = x.view(-1, self.flat_sz)
+        x = self.fc(x)
+        x = self.hidden_drop2(x)
+        x = self.bn2(x)
+        x = F.relu(x)
 
-        return scores
+        x = torch.mm(x, all_ent.transpose(1, 0))
+        x += self.bias.expand_as(x)
+        score = torch.sigmoid(x)
 
-    def reg_loss(self, embedding):
-        """Regularization loss"""
-        loss = torch.mean(embedding.pow(2)) + torch.mean(self.relation_embedding.pow(2))
+        return score
 
-        return self.regularization * loss
-
-    def loss_func(self, embedding, triplets, labels):
+    def loss(self, pred, label):
         """Compute loss for the model"""
-        scores = self.score_func(embedding, triplets)
 
-        # compute cross-entropy loss
-        loss = F.binary_cross_entropy_with_logits(scores, labels)
-
-        # compute accuracy based on distmult
-        logits = torch.sigmoid(scores)
-        pred = logits >= 0.5
-        true = labels >= 0.5
-        acc = torch.mean(pred.eq(true).float())
-
-        loss += self.reg_loss(embedding)
-
-        return loss, acc
+        return F.binary_cross_entropy(pred, label)
 
 
 class MGCNConv(MessagePassing):
-    r"""The relational graph convolutional operator from the `"Modeling
-    Relational Data with Graph Convolutional Networks"
-    <https://arxiv.org/abs/1703.06103>`_ paper
-    .. math::
-        \mathbf{x}^{\prime}_i = \mathbf{\Theta}_{\textrm{root}} \cdot
-        \mathbf{x}_i + \sum_{r \in \mathcal{R}} \sum_{j \in \mathcal{N}_r(i)}
-        \frac{1}{|\mathcal{N}_r(i)|} \mathbf{\Theta}_r \cdot \mathbf{x}_j,
-    where :math:`\mathcal{R}` denotes the set of relations, *i.e.* edge types.
-    Edge type needs to be a one-dimensional :obj:`torch.long` tensor which
-    stores a relation identifier
-    :math:`\in \{ 0, \ldots, |\mathcal{R}| - 1\}` for each edge.
-    Args:
-        in_channels (int): Size of each input sample.
-        out_channels (int): Size of each output sample.
-        num_relations (int): Number of relations.
-        num_bases (int): Number of bases used for basis-decomposition.
-        root_weight (bool, optional): If set to :obj:`False`, the layer will
-            not add transformed root node features to the output.
-            (default: :obj:`True`)
-        bias (bool, optional): If set to :obj:`False`, the layer will not learn
-            an additive bias. (default: :obj:`True`)
-        **kwargs (optional): Additional arguments of
-            :class:`torch_geometric.nn.conv.MessagePassing`.
-    """
 
     def __init__(self, in_channels, out_channels, num_relations, num_bases,
                  root_weight=True, bias=True, **kwargs):
@@ -143,22 +120,18 @@ class MGCNConv(MessagePassing):
         nn.init.zeros_(self.bias)
 
     def forward(self, x, edge_index, edge_type, edge_norm=None, size=None):
-        """"""
+
         return self.propagate(edge_index, size=size, x=x, edge_type=edge_type,
                               edge_norm=edge_norm)
 
     def message(self, x_i, x_j, edge_index_i, edge_index_j, edge_index, edge_type, edge_norm):
-        alpha = (x_i * self.weight[edge_type] * x_j).sum(dim=1)
-        _, unique_edge_index_i = torch.unique(edge_index_i, return_inverse=True)
-        alpha = softmax(alpha, unique_edge_index_i, edge_index_i.size(0))
 
         w = torch.matmul(self.att, self.basis.view(self.num_bases, -1))
         w = w.view(self.num_relations, self.in_channels, self.out_channels)
         w = torch.index_select(w, 0, edge_type)
         out = torch.bmm(x_j.unsqueeze(1), w).squeeze(-2)
 
-        # return (out * edge_norm.view(-1, 1) + out * alpha.view(-1, 1)) / 2
-        return out * alpha.view(-1, 1)
+        return out * edge_norm.view(-1, 1)
 
     def update(self, aggr_out, x):
         if self.root is not None:

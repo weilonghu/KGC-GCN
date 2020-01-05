@@ -129,4 +129,5 @@ dmypy.json
 .pyre/
 
 .vscode
-data
+data/WN18RR
+experiments

@@ -164,13 +164,14 @@ class DataLoader(object):
         else:
             raise ValueError('Unkown data type')
 
-    def _create_data_loader(self, dataset, batch_size, num_workers, shuffle):
+    def _create_data_loader(self, dataset, batch_size, num_workers, shuffle, drop_last=False):
         iterator = data.DataLoader(
             dataset,
             batch_size=batch_size,
             num_workers=max(0, num_workers),
             shuffle=shuffle,
-            collate_fn=dataset.collate_fn
+            collate_fn=dataset.collate_fn,
+            drop_last=drop_last
         )
 
         return iterator
@@ -178,9 +179,13 @@ class DataLoader(object):
     def get_data_loaders(self, batch_size, num_workers, params):
 
         marks = ['train', 'valid_head', 'valid_tail', 'test_head', 'test_tail']
+        drops = [True] + [False] * 4
 
-        data_iter = {
-            mark: self._create_data_loader(self._get_dataset(mark, params), batch_size, num_workers, shuffle=True) for mark in marks
-        }
-
-        return data_iter
+        data_iters = {}
+        for mark, drop in zip(marks, drops):
+            data_iters[mark] = self._create_data_loader(self._get_dataset(mark, params),
+                                                        batch_size=batch_size,
+                                                        num_workers=num_workers,
+                                                        shuffle=True,
+                                                        drop_last=drop)
+        return data_iters

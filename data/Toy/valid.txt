@@ -1,0 +1,6 @@
+e1  r2  e2
+e1  r3  e3
+e1  r5  e5
+e3  r4  e2
+e6  r2  e7
+e3  r1  e4

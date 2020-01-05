@@ -20,10 +20,10 @@ parser.add_argument('--dataset', default='Toy', help="Directory containing the d
 parser.add_argument('--seed', default=2020, help="random seed for initialization")
 parser.add_argument('--restore_dir', default=None, help='Optional, directory containing weights to reload before training')
 parser.add_argument('--multi_gpu', default=False, action='store_true', help="Whether to use multiple GPUs if available")
-parser.add_argument('--batch_size', default=4, type=int, help="Batch size")
+parser.add_argument('--batch_size', default=2, type=int, help="Batch size")
 parser.add_argument('--max_epoch', default=500, type=int, help='Number of maximum epochs')
 parser.add_argument('--min_epoch', default=500, type=int, help='Number of minimum epochs')
-parser.add_argument('--eval_every', default=5, type=int, help='Number of epochs to test the model')
+parser.add_argument('--eval_every', default=1, type=int, help='Number of epochs to test the model')
 parser.add_argument('--patience', default=0.01, type=float, help='Increasement between two epochs')
 parser.add_argument('--patience_num', default=10, type=int, help='Early stopping creteria')
 parser.add_argument('--learning_rate', default=0.001, type=float, help='Learning rate')
@@ -31,7 +31,7 @@ parser.add_argument('--weight_decay', default=0, type=float, help='Weight decay 
 parser.add_argument('--lbl_smooth', default=0.1, type=float, help="Label smoothing")
 parser.add_argument('--num_workers', default=0, type=int, help='Number of processes to construct batches')
 parser.add_argument('--bias', action='store_true', help='Whether to use bias in the model')
-parser.add_argument('--embed_dim', default=100, type=int, help='Dimension size for entities and relations')
+parser.add_argument('--embed_dim', default=200, type=int, help='Dimension size for entities and relations')
 parser.add_argument('--hidden_drop', default=0.3, type=float, help='Dropout after GCN')
 parser.add_argument('--hidden_drop2', default=0.3, type=float, help='ConvE: hidden dropout')
 parser.add_argument('--feat_drop', default=0.3, type=float, help='ConvE: feature dropout')
@@ -75,24 +75,24 @@ def train(model, data_iter, graph, optimizer, params):
     return loss_avg()
 
 
-def evaluate(model, data_iters, data_type, mark='Val'):
-    tail_results = predict(model, data_iters, data_type, params.device, mode='tail_batch')
-    head_results = predict(model, data_iters, data_type, params.device, mode='head_batch')
+def evaluate(model, data_iters, graph, data_type, mark='Val', hits=[1, 3, 10]):
+    tail_results = predict(model, data_iters, graph, data_type, params.device, mode='tail_batch')
+    head_results = predict(model, data_iters, graph, data_type, params.device, mode='head_batch')
 
     results = {}
     count = float(tail_results['count'])
 
-    results['left_mr'] = np.round(tail_results['mr'] / count, 5)
-    results['left_mrr'] = np.round(tail_results['mrr'] / count, 5)
-    results['right_mr'] = np.round(head_results['mr'] / count, 5)
-    results['right_mrr'] = np.round(head_results['mrr'] / count, 5)
+    # results['left_mr'] = np.round(tail_results['mr'] / count, 5)
+    # results['left_mrr'] = np.round(tail_results['mrr'] / count, 5)
+    # results['right_mr'] = np.round(head_results['mr'] / count, 5)
+    # results['right_mrr'] = np.round(head_results['mrr'] / count, 5)
     results['mr'] = np.round((tail_results['mr'] + head_results['mr']) / (2 * count), 5)
     results['mrr'] = np.round((tail_results['mrr'] + head_results['mrr']) / (2 * count), 5)
 
-    for k in range(10):
-        results['left_hits@{}'.format(k + 1)] = np.round(tail_results['hits@{}'.format(k + 1)] / count, 5)
-        results['right_hits@{}'.format(k + 1)] = np.round(head_results['hits@{}'.format(k + 1)] / count, 5)
-        results['hits@{}'.format(k + 1)] = np.round((tail_results['hits@{}'.format(k + 1)] + head_results['hits@{}'.format(k + 1)]) / (2 * count), 5)
+    for k in hits:
+        # results['left_hits@{}'.format(k)] = np.round(tail_results['hits@{}'.format(k)] / count, 5)
+        # results['right_hits@{}'.format(k)] = np.round(head_results['hits@{}'.format(k)] / count, 5)
+        results['hits@{}'.format(k)] = np.round((tail_results['hits@{}'.format(k)] + head_results['hits@{}'.format(k)]) / (2 * count), 5)
 
     metrics_str = "; ".join("{}: {:05.3f}".format(k, v) for k, v in results.items())
     tqdm.write("- {} metrics: {}  ".format(mark, metrics_str))
@@ -100,7 +100,7 @@ def evaluate(model, data_iters, data_type, mark='Val'):
     return results
 
 
-def predict(model, data_iters, data_type, device, mode='tail_batch'):
+def predict(model, data_iters, graph, data_type, device, mode='tail_batch'):
     """Function to run model evaluation for a given mode
 
     Return:
@@ -116,7 +116,7 @@ def predict(model, data_iters, data_type, device, mode='tail_batch'):
             triplets, label = [_.to(device) for _ in batch]
             sub, rel, obj, label = triplets[:, 0], triplets[:, 1], triplets[:, 2], label
 
-            pred = model(sub, rel)
+            pred = model(sub, rel, graph)
             b_range = torch.arange(pred.size(0), device=device)
             target_pred = pred[b_range, obj]
             pred = torch.where(label.byte(), -torch.ones_like(pred) * 10000000, pred)
@@ -155,7 +155,7 @@ def train_and_evaluate(model, data_iters, graph, optimizer, scheduler, params, m
         scheduler.step()
 
         if (epoch + 1) % params.eval_every == 0:
-            val_metrics = evaluate(model, data_iters, 'valid', mark='Val')
+            val_metrics = evaluate(model, data_iters, graph, 'valid', mark='Val')
 
             val_measure = val_metrics['mrr']
             improve_measure = val_measure - best_measure
@@ -225,4 +225,4 @@ if __name__ == '__main__':
     if params.do_train:
         train_and_evaluate(model, data_iters, data_loader.graph, optimizer, scheduler, params, model_dir, args.restore_dir)
     if params.do_test:
-        evaluate(model, data_iters, 'test', mark='Test')
+        evaluate(model, data_iters, data_loader.graph, 'test', mark='Test')

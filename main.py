@@ -20,7 +20,7 @@ parser.add_argument('--dataset', default='Toy', help="Directory containing the d
 parser.add_argument('--seed', default=2020, help="random seed for initialization")
 parser.add_argument('--restore_dir', default=None, help='Optional, directory containing weights to reload before training')
 parser.add_argument('--multi_gpu', default=False, action='store_true', help="Whether to use multiple GPUs if available")
-parser.add_argument('--batch_size', default=2, type=int, help="Batch size")
+parser.add_argument('--batch_size', default=4, type=int, help="Batch size")
 parser.add_argument('--max_epoch', default=500, type=int, help='Number of maximum epochs')
 parser.add_argument('--min_epoch', default=500, type=int, help='Number of minimum epochs')
 parser.add_argument('--eval_every', default=5, type=int, help='Number of epochs to test the model')
@@ -40,8 +40,8 @@ parser.add_argument('--k_h', default=20, type=int, help='ConvE: k_h')
 parser.add_argument('--num_filter', default=200, type=int, help='ConvE: number of filters in convolution')
 parser.add_argument('--kernel_size', default=7, type=int, help='ConvE: kernel size to use')
 parser.add_argument('--clip_grad', default=1.0, type=float, help='Gradient clipping')
-parser.add_argument('--do_train', action='store_true', help='If train the model')
-parser.add_argument('--do_test', action='store_true', help='If test the model')
+parser.add_argument('--do_train', action='store_false', help='If train the model')
+parser.add_argument('--do_test', action='store_false', help='If test the model')
 parser.add_argument('--bi_direction', action='store_true', help='If add reverse relation to the graph')
 
 
@@ -53,11 +53,11 @@ def train(model, data_iter, graph, optimizer, params):
     loss_avg = utils.RunningAverage()
 
     with tqdm(data_iter) as bar:
-        for batch in bar:
+        for triplets, labels in bar:
             optimizer.zero_grad()
 
-            pred = model(batch[:, 0], batch[:, 2], graph)
-            loss = model.loss(pred, batch.labels)
+            pred = model(triplets[:, 0], triplets[:, 1], graph)
+            loss = model.loss(pred, labels)
 
             if params.n_gpu > 1 and params.multi_gpu:
                 loss = loss.mean()  # mean() to average on multi-gpu
@@ -150,7 +150,7 @@ def train_and_evaluate(model, data_iters, graph, optimizer, scheduler, params, m
 
     for epoch in range(1, params.max_epoch + 1):
         # Run one epoch
-        logging.info("Epoch {}/{}".format(epoch, params.max_epoch + 1))
+        logging.info("Epoch {}/{}".format(epoch, params.max_epoch))
         train(model, data_iters['train'], graph, optimizer, params)
         scheduler.step()
 

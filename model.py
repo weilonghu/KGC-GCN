@@ -11,7 +11,7 @@ class MGCN(torch.nn.Module):
         self.params = params
 
         self.entity_embedding = nn.Embedding(num_entities, params.embed_dim)
-        self.relation_embedding = nn.Embedding(num_relations, params.embed_dim)
+        self.relation_embedding = nn.Embedding(2 * num_relations, params.embed_dim)
 
         self.conv1 = MGCNConv(params.embed_dim, params.embed_dim, num_relations * 2, num_bases=4)
         self.conv2 = ConvE(params, num_entities)
@@ -22,10 +22,11 @@ class MGCN(torch.nn.Module):
         # gcn
         entity_embeddings = self.entity_embedding(entity)
         entity_embeddings = self.conv1(entity_embeddings, edge_index, edge_type, edge_norm)
-        entity_embeddings = self.hidden_drop(entity_embeddings, training=self.training)
+        entity_embeddings = F.dropout(entity_embeddings, p=self.params.hidden_drop, training=self.training)
 
         # ConvE
-        score = self.conv2(src, rel, entity_embeddings)
+        src_emb, rel_emb, all_ent = entity_embeddings[src], self.relation_embedding(rel), entity_embeddings
+        score = self.conv2(src_emb, rel_emb, all_ent)
 
         return score
 
@@ -104,9 +105,11 @@ class ConvE(nn.Module):
     def __init__(self, params, num_entities):
         super(ConvE, self).__init__()
 
+        self.params = params
+
         self.bn0 = nn.BatchNorm2d(1)
         self.bn1 = nn.BatchNorm2d(params.num_filter)
-        self.bn2 = torch.nn.BatchNorm1d(params.embed_dim)
+        self.bn2 = nn.BatchNorm1d(params.embed_dim)
 
         self.hidden_drop = torch.nn.Dropout(params.hidden_drop)
         self.hidden_drop2 = torch.nn.Dropout(params.hidden_drop2)
@@ -127,13 +130,12 @@ class ConvE(nn.Module):
 
         self.register_parameter('bias', nn.Parameter(torch.zeros(num_entities)))
 
-    def forward(self, src, rel, embedding):
-        # ConvE
-        src_emb, rel_emb, all_ent = embedding[src], self.relation_embedding(rel), embedding
+    def forward(self, src_emb, rel_emb, all_ent):
+
         src_emb = src_emb.view(-1, 1, self.params.embed_dim)
         rel_emb = rel_emb.view(-1, 1, self.params.embed_dim)
         stack_inp = torch.cat([src_emb, rel_emb], dim=1)
-        stack_inp = torch.transpose(stack_inp, 2, 1).view(-1, 1, 2 * self.params.k_w, self.params.k_h)
+        stack_inp = torch.transpose(stack_inp, 2, 1).reshape(-1, 1, 2 * self.params.k_w, self.params.k_h)
 
         x = self.bn0(stack_inp)
         x = self.conv_e(x)

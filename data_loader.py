@@ -109,8 +109,8 @@ class DataLoader(object):
                     {'triple': (obj, rel_inv, sub), 'label': sr2o_all[(obj, rel_inv)]})
         self.triplets = dict(self.triplets)
 
-        graph = self._build_graph(np.arange(self.num_entity), np.array(
-            data['train']), bi_direction=True)
+        graph = self._build_graph(np.arange(self.num_entity, dtype=np.int64), np.array(
+            data['train'], dtype=np.int64), bi_direction=True)
 
         # report the dataset
         logging.info('entity={}, relation={}, train_triplets={}, valid_triplets={}, test_triplets={}'.format(
@@ -120,8 +120,7 @@ class DataLoader(object):
 
     def _edge_normal(self, edge_type, edge_index, num_entity):
 
-        edge_type, edge_index = torch.from_numpy(
-            edge_type), torch.from_numpy(edge_index)
+        edge_type, edge_index = torch.from_numpy(edge_type), torch.from_numpy(edge_index).long()
         counts = torch.ones_like(edge_type).to(torch.float)
         deg = scatter_add(counts, edge_index[1], dim_size=num_entity)
         edge_norm = 1 / deg[edge_index[1]]
@@ -160,7 +159,7 @@ class DataLoader(object):
 
         if data_type == 'train':
             return KBDataset(self.triplets['train'], len(self.entity2id), params, training=True)
-        elif data_type == 'valid' or data_type == 'test':
+        elif data_type in ['valid_head', 'valid_tail', 'test_head', 'test_tail']:
             return KBDataset(self.triplets[data_type], len(self.entity2id), params)
         else:
             raise ValueError('Unkown data type')

@@ -3,7 +3,7 @@
     "seed": 2020,
     "restore_dir": null,
     "multi_gpu": false,
-    "batch_size": 2,
+    "batch_size": 4,
     "max_epoch": 500,
     "min_epoch": 500,
     "eval_every": 5,
@@ -23,7 +23,7 @@
     "num_filter": 200,
     "kernel_size": 7,
     "clip_grad": 1.0,
-    "do_train": false,
-    "do_test": false,
+    "do_train": true,
+    "do_test": true,
     "bi_direction": false
 }

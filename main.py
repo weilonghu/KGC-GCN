@@ -6,8 +6,9 @@ import os
 import random
 
 import torch
+import numpy as np
 import torch.nn as nn
-from tqdm import trange
+from tqdm import tqdm
 
 import utils
 from model import MGCN
@@ -15,17 +16,18 @@ from data_loader import DataLoader
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--dataset', default='FB15k-237', help="Directory containing the dataset")
+parser.add_argument('--dataset', default='Toy', help="Directory containing the dataset")
 parser.add_argument('--seed', default=2020, help="random seed for initialization")
 parser.add_argument('--restore_dir', default=None, help='Optional, directory containing weights to reload before training')
 parser.add_argument('--multi_gpu', default=False, action='store_true', help="Whether to use multiple GPUs if available")
-parser.add_argument('--batch_size', default=128, type=int, help="Batch size")
+parser.add_argument('--batch_size', default=2, type=int, help="Batch size")
 parser.add_argument('--max_epoch', default=500, type=int, help='Number of maximum epochs')
 parser.add_argument('--min_epoch', default=500, type=int, help='Number of minimum epochs')
 parser.add_argument('--eval_every', default=5, type=int, help='Number of epochs to test the model')
 parser.add_argument('--patience', default=0.01, type=float, help='Increasement between two epochs')
 parser.add_argument('--patience_num', default=10, type=int, help='Early stopping creteria')
 parser.add_argument('--learning_rate', default=0.001, type=float, help='Learning rate')
+parser.add_argument('--weight_decay', default=0, type=float, help='Weight decay for the optimizer')
 parser.add_argument('--lbl_smooth', default=0.1, type=float, help="Label smoothing")
 parser.add_argument('--num_workers', default=0, type=int, help='Number of processes to construct batches')
 parser.add_argument('--bias', action='store_true', help='Whether to use bias in the model')
@@ -40,58 +42,98 @@ parser.add_argument('--kernel_size', default=7, type=int, help='ConvE: kernel si
 parser.add_argument('--clip_grad', default=1.0, type=float, help='Gradient clipping')
 parser.add_argument('--do_train', action='store_true', help='If train the model')
 parser.add_argument('--do_test', action='store_true', help='If test the model')
+parser.add_argument('--bi_direction', action='store_true', help='If add reverse relation to the graph')
 
 
-def train(model, data_iter, optimizer, params):
+def train(model, data_iter, graph, optimizer, params):
     """Train the model for one epoch"""
     # set the model to training mode
     model.train()
 
-    epoch = trange(len(data_iter) // params.batch_size)
-    for step, batch in zip(epoch, data_iter):
-        optimizer.zero_grad()
+    loss_avg = utils.RunningAverage()
 
-        pred = model(batch)
-        loss = model.loss(pred, batch.labels)
+    with tqdm(data_iter) as bar:
+        for batch in bar:
+            optimizer.zero_grad()
 
-        if params.n_gpu > 1 and params.multi_gpu:
-            loss = loss.mean()  # mean() to average on multi-gpu
-        loss.backward()
+            pred = model(batch[:, 0], batch[:, 2], graph)
+            loss = model.loss(pred, batch.labels)
 
-        # gradient clipping
-        nn.utils.clip_grad_norm_(
-            parameters=model.parameters(), max_norm=params.clip_grad)
-        optimizer.step()
+            if params.n_gpu > 1 and params.multi_gpu:
+                loss = loss.mean()  # mean() to average on multi-gpu
+            loss.backward()
 
-        # update the progress bar
-        epoch.set_postfix(loss='{:05.3f}'.format(loss))
+            # gradient clipping
+            nn.utils.clip_grad_norm_(
+                parameters=model.parameters(), max_norm=params.clip_grad)
+            optimizer.step()
+
+            # update the progress bar
+            loss_avg.update(loss.item())
+            bar.set_postfix(loss='{:05.3f}'.format(loss_avg()))
+
+    return loss_avg()
 
 
-def evaluate(model, test_graph, eval_triplets, all_triplets, params, mark='Eval', verbose=False):
-    """Evaluate the model on dataset 'data'"""
-    # set the model to evaluation mode
-    model.eval()
-    model.cpu()
+def evaluate(model, data_iters, data_type, mark='Val'):
+    tail_results = predict(model, data_iters, data_type, params.device, mode='tail_batch')
+    head_results = predict(model, data_iters, data_type, params.device, mode='head_batch')
 
-    # compute embeddings for entities
-    with torch.no_grad():
-        entity_embedding = model(test_graph)
-        relation_embeddings = model.relation_embedding.cpu()
-        # calculate mrr
-        metrics = calc_mrr(entity_embedding, relation_embeddings, eval_triplets, all_triplets, hits=[1, 3, 10])
+    results = {}
+    count = float(tail_results['count'])
 
-    model.to(params.device)
+    results['left_mr'] = np.round(tail_results['mr'] / count, 5)
+    results['left_mrr'] = np.round(tail_results['mrr'] / count, 5)
+    results['right_mr'] = np.round(head_results['mr'] / count, 5)
+    results['right_mrr'] = np.round(head_results['mrr'] / count, 5)
+    results['mr'] = np.round((tail_results['mr'] + head_results['mr']) / (2 * count), 5)
+    results['mrr'] = np.round((tail_results['mrr'] + head_results['mrr']) / (2 * count), 5)
 
-    # logging and report
-    metrics['measure'] = metrics['mrr']
-    metrics_str = "; ".join("{}: {:05.3f}".format(k, v)
-                            for k, v in metrics.items())
+    for k in range(10):
+        results['left_hits@{}'.format(k + 1)] = np.round(tail_results['hits@{}'.format(k + 1)] / count, 5)
+        results['right_hits@{}'.format(k + 1)] = np.round(head_results['hits@{}'.format(k + 1)] / count, 5)
+        results['hits@{}'.format(k + 1)] = np.round((tail_results['hits@{}'.format(k + 1)] + head_results['hits@{}'.format(k + 1)]) / (2 * count), 5)
+
+    metrics_str = "; ".join("{}: {:05.3f}".format(k, v) for k, v in results.items())
     tqdm.write("- {} metrics: {}  ".format(mark, metrics_str))
 
-    return metrics
+    return results
 
 
-def train_and_evaluate(model, data_loader, optimizer, scheduler, params, model_dir, restore_dir):
+def predict(model, data_iters, data_type, device, mode='tail_batch'):
+    """Function to run model evaluation for a given mode
+
+    Return:
+        result['mr], result['mrr], result['hits@k']
+    """
+    model.eval()
+
+    with torch.no_grad():
+        results = {}
+        data_iter = iter(data_iters['{}_{}'.format(data_type, mode.split('_')[0])])
+
+        for batch in data_iter:
+            triplets, label = [_.to(device) for _ in batch]
+            sub, rel, obj, label = triplets[:, 0], triplets[:, 1], triplets[:, 2], label
+
+            pred = model(sub, rel)
+            b_range = torch.arange(pred.size(0), device=device)
+            target_pred = pred[b_range, obj]
+            pred = torch.where(label.byte(), -torch.ones_like(pred) * 10000000, pred)
+            pred[b_range, obj] = target_pred
+            ranks = 1 + torch.argsort(torch.argsort(pred, dim=1, descending=True), dim=1, descending=False)[b_range, obj]
+
+            ranks = ranks.float()
+            results['count'] = torch.numel(ranks) + results.get('count', 0.0)
+            results['mr'] = torch.sum(ranks).item() + results.get('mr', 0.0)
+            results['mrr'] = torch.sum(1.0 / ranks).item() + results.get('mrr', 0.0)
+            for k in range(10):
+                results['hits@{}'.format(k + 1)] = torch.numel(ranks[ranks <= (k + 1)]) + results.get('hits@{}'.format(k + 1), 0.0)
+
+    return results
+
+
+def train_and_evaluate(model, data_iters, graph, optimizer, scheduler, params, model_dir, restore_dir):
     """Train the model and evaluate every epoch"""
 
     # main evaluation criteria
@@ -104,29 +146,23 @@ def train_and_evaluate(model, data_loader, optimizer, scheduler, params, model_d
         best_measure = utils.load_checkpoint(os.path.join(restore_dir, 'last.ckpt'), model)
         logging.info('Restore model from {} with best measure: {}'.format(os.path.join(restore_dir, 'last.ckpt'), best_measure))
 
-    # create dataset
-    train_set = data_loader.get_dataset('train', params)
-    eval_set = data_loader.get_dataset('valid', params)
-    train_iter = data_loader.data_iterator(train_set, params.batch_size, params.num_worker, shuffle=True)
-    eval_iter = data_loader.data_iterator(eval_set, params.batch_size, 0, False)
-
     logging.info('Starting training for {} epoch(s)'.format(params.max_epoch))
 
-    for epoch in range(1, params.max_epochs + 1):
+    for epoch in range(1, params.max_epoch + 1):
         # Run one epoch
         logging.info("Epoch {}/{}".format(epoch, params.max_epoch + 1))
-        train(model, train_iter, optimizer, params)
+        train(model, data_iters['train'], graph, optimizer, params)
         scheduler.step()
 
         if (epoch + 1) % params.eval_every == 0:
-            val_metrics = evaluate(model, test_graph, eval_triplets, all_triplets, params, mark='Val')
-            val_measure = val_metrics['measure']
+            val_metrics = evaluate(model, data_iters, 'valid', mark='Val')
+
+            val_measure = val_metrics['mrr']
             improve_measure = val_measure - best_measure
             if improve_measure > 0:
                 best_measure = val_measure
-                state = {'state_dict': model.state_dict(),
-                            'optim_dict': optimizer.state_dict(),
-                            'measure': best_measure}
+                state = {'state_dict': model.state_dict(), 'optim_dict': optimizer.state_dict(),
+                         'measure': best_measure}
                 utils.save_checkpoint(state, is_best=False, checkpoint_dir=model_dir)
                 if improve_measure < params.patience:
                     patience_counter += 1
@@ -136,7 +172,7 @@ def train_and_evaluate(model, data_loader, optimizer, scheduler, params, model_d
                 patience_counter += 1
 
             # early stopping and logging best measure
-            if (patience_counter >= params.patience_num and epoch > params.min_epoch_num) or epoch == params.epoch_num:
+            if (patience_counter >= params.patience_num and epoch > params.min_epoch) or epoch == params.max_epoch:
                 logging.info("Early stopping with best val measure: {:05.2f}".format(best_measure))
                 break
 
@@ -170,6 +206,7 @@ if __name__ == '__main__':
     # create dataset and normalize
     logging.info('Loading the dataset...')
     data_loader = DataLoader(args.dataset, params)
+    data_iters = data_loader.get_data_loaders(params.batch_size, params.num_workers, params)
 
     # prepare model
     model = MGCN(data_loader.num_entity, data_loader.num_relation, params)
@@ -185,5 +222,7 @@ if __name__ == '__main__':
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.95, last_epoch=-1)
 
     # train and evaluate the model
-    train_and_evaluate(model, data_loader, optimizer, scheduler,
-                       params, model_dir, args.restore_dir)
+    if params.do_train:
+        train_and_evaluate(model, data_iters, data_loader.graph, optimizer, scheduler, params, model_dir, args.restore_dir)
+    if params.do_test:
+        evaluate(model, data_iters, 'test', mark='Test')

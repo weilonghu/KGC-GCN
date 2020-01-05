@@ -94,19 +94,19 @@ def set_logger(log_path):
     if not logger.handlers:
         # Logging to a file
         file_handler = logging.FileHandler(log_path)
-        file_handler.setFormatter(logging.Formatter('%(asctime)s:%(levelname)s: %(message)s'))
+        file_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
         logger.addHandler(file_handler)
 
         # Logging to console
         stream_handler = logging.StreamHandler()
-        stream_handler.setFormatter(logging.Formatter('%(asctime)s:%(levelname)s: %(message)s'))
+        stream_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
         logger.addHandler(stream_handler)
 
 
 def save_json(params, json_file):
     """Save params dict to a json file"""
     with open(json_file, 'w') as fp:
-        json.dump(params, fp)
+        json.dump(params, fp, indent=4)
 
 
 def save_checkpoint(state, is_best, checkpoint_dir):

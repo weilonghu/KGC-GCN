@@ -16,15 +16,15 @@ from data_loader import DataLoader
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--dataset', default='Toy', help="Directory containing the dataset")
+parser.add_argument('--dataset', default='FB15k-237', help="Directory containing the dataset")
 parser.add_argument('--seed', default=2020, help="random seed for initialization")
 parser.add_argument('--restore_dir', default=None, help='Optional, directory containing weights to reload before training')
 parser.add_argument('--multi_gpu', default=False, action='store_true', help="Whether to use multiple GPUs if available")
-parser.add_argument('--batch_size', default=2, type=int, help="Batch size")
+parser.add_argument('--batch_size', default=128, type=int, help="Batch size")
 parser.add_argument('--max_epoch', default=500, type=int, help='Number of maximum epochs')
-parser.add_argument('--min_epoch', default=500, type=int, help='Number of minimum epochs')
+parser.add_argument('--min_epoch', default=50, type=int, help='Number of minimum epochs')
 parser.add_argument('--eval_every', default=1, type=int, help='Number of epochs to test the model')
-parser.add_argument('--patience', default=0.01, type=float, help='Increasement between two epochs')
+parser.add_argument('--patience', default=0.001, type=float, help='Increasement between two epochs')
 parser.add_argument('--patience_num', default=10, type=int, help='Early stopping creteria')
 parser.add_argument('--learning_rate', default=0.001, type=float, help='Learning rate')
 parser.add_argument('--weight_decay', default=0, type=float, help='Weight decay for the optimizer')
@@ -56,8 +56,9 @@ def train(model, data_iter, graph, optimizer, params):
         for triplets, labels in bar:
             optimizer.zero_grad()
 
+            triplets = triplets.to(params.device)
             pred = model(triplets[:, 0], triplets[:, 1], graph)
-            loss = model.loss(pred, labels)
+            loss = model.loss(pred, labels.to(params.device))
 
             if params.n_gpu > 1 and params.multi_gpu:
                 loss = loss.mean()  # mean() to average on multi-gpu
@@ -70,7 +71,7 @@ def train(model, data_iter, graph, optimizer, params):
 
             # update the progress bar
             loss_avg.update(loss.item())
-            bar.set_postfix(loss='{:05.3f}'.format(loss_avg()))
+            bar.set_postfix(loss='{:07.5f}'.format(loss_avg()))
 
     return loss_avg()
 
@@ -95,7 +96,7 @@ def evaluate(model, data_iters, graph, data_type, mark='Val', hits=[1, 3, 10]):
         results['hits@{}'.format(k)] = np.round((tail_results['hits@{}'.format(k)] + head_results['hits@{}'.format(k)]) / (2 * count), 5)
 
     metrics_str = "; ".join("{}: {:05.3f}".format(k, v) for k, v in results.items())
-    tqdm.write("- {} metrics: {}  ".format(mark, metrics_str))
+    logging.info("- {} metrics: {}  ".format(mark, metrics_str))
 
     return results
 
@@ -206,6 +207,7 @@ if __name__ == '__main__':
     # create dataset and normalize
     logging.info('Loading the dataset...')
     data_loader = DataLoader(args.dataset, params)
+    data_loader.graph.to(params.device)
     data_iters = data_loader.get_data_loaders(params.batch_size, params.num_workers, params)
 
     # prepare model
@@ -219,7 +221,7 @@ if __name__ == '__main__':
     optimizer = torch.optim.Adam(
         model.parameters(), lr=params.learning_rate, weight_decay=params.weight_decay)
     # optimizer = torch.optim.SGD(model.parameters(), lr=params.learning_rate, momentum=0.9)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.95, last_epoch=-1)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=50, gamma=0.95, last_epoch=-1)
 
     # train and evaluate the model
     if params.do_train:

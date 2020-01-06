@@ -13,7 +13,7 @@ class MGCN(torch.nn.Module):
         self.entity_embedding = nn.Embedding(num_entities, params.embed_dim)
         self.relation_embedding = nn.Embedding(2 * num_relations, params.embed_dim)
 
-        self.conv1 = MGCNConv(params.embed_dim, params.embed_dim, num_relations * 2, num_bases=4)
+        self.conv1 = MGCNConv(params.embed_dim, params.embed_dim, num_relations * 2)
         self.conv2 = ConvE(params, num_entities)
 
     def forward(self, src, rel, data):
@@ -37,18 +37,14 @@ class MGCN(torch.nn.Module):
 
 class MGCNConv(MessagePassing):
 
-    def __init__(self, in_channels, out_channels, num_relations, num_bases,
-                 root_weight=True, bias=True, **kwargs):
+    def __init__(self, in_channels, out_channels, num_relations, root_weight=True, bias=True, **kwargs):
         super(MGCNConv, self).__init__(aggr='add', **kwargs)
 
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.num_relations = num_relations
-        self.num_bases = num_bases
 
-        self.basis = nn.Parameter(torch.Tensor(num_bases, in_channels, out_channels))
-        self.att = nn.Parameter(torch.Tensor(num_relations, num_bases))
-        self.weight = nn.Parameter(torch.Tensor(num_relations, out_channels))
+        self.weight = nn.Parameter(torch.Tensor(in_channels, out_channels))
 
         if root_weight:
             self.root = nn.Parameter(torch.Tensor(in_channels, out_channels))
@@ -63,8 +59,6 @@ class MGCNConv(MessagePassing):
         self.reset_parameters()
 
     def reset_parameters(self):
-        nn.init.xavier_uniform_(self.basis, nn.init.calculate_gain('relu'))
-        nn.init.xavier_uniform_(self.att, nn.init.calculate_gain('relu'))
         nn.init.xavier_uniform_(self.root, nn.init.calculate_gain('relu'))
         nn.init.xavier_uniform_(self.weight, nn.init.calculate_gain('relu'))
         nn.init.zeros_(self.bias)
@@ -76,10 +70,7 @@ class MGCNConv(MessagePassing):
 
     def message(self, x_i, x_j, edge_index_i, edge_index_j, edge_index, edge_type, edge_norm):
 
-        w = torch.matmul(self.att, self.basis.view(self.num_bases, -1))
-        w = w.view(self.num_relations, self.in_channels, self.out_channels)
-        w = torch.index_select(w, 0, edge_type)
-        out = torch.bmm(x_j.unsqueeze(1), w).squeeze(-2)
+        out = torch.matmul(x_j, self.weight)
 
         return out * edge_norm.view(-1, 1)
 

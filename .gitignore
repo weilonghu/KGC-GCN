@@ -130,4 +130,5 @@ dmypy.json
 
 .vscode
 data/WN18RR
+data/FB15k-237
 experiments

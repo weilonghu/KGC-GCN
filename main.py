@@ -16,7 +16,7 @@ from data_loader import DataLoader
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--dataset', default='FB15k-237', help="Directory containing the dataset")
+parser.add_argument('--dataset', default='WN18RR', help="Directory containing the dataset")
 parser.add_argument('--seed', default=2020, help="random seed for initialization")
 parser.add_argument('--restore_dir', default=None, help='Optional, directory containing weights to reload before training')
 parser.add_argument('--multi_gpu', default=False, action='store_true', help="Whether to use multiple GPUs if available")
@@ -25,14 +25,14 @@ parser.add_argument('--max_epoch', default=500, type=int, help='Number of maximu
 parser.add_argument('--min_epoch', default=50, type=int, help='Number of minimum epochs')
 parser.add_argument('--eval_every', default=1, type=int, help='Number of epochs to test the model')
 parser.add_argument('--patience', default=0.001, type=float, help='Increasement between two epochs')
-parser.add_argument('--patience_num', default=10, type=int, help='Early stopping creteria')
+parser.add_argument('--patience_num', default=30, type=int, help='Early stopping creteria')
 parser.add_argument('--learning_rate', default=0.001, type=float, help='Learning rate')
 parser.add_argument('--weight_decay', default=0, type=float, help='Weight decay for the optimizer')
 parser.add_argument('--lbl_smooth', default=0.1, type=float, help="Label smoothing")
 parser.add_argument('--num_workers', default=0, type=int, help='Number of processes to construct batches')
 parser.add_argument('--bias', action='store_true', help='Whether to use bias in the model')
 parser.add_argument('--embed_dim', default=200, type=int, help='Dimension size for entities and relations')
-parser.add_argument('--hidden_drop', default=0.3, type=float, help='Dropout after GCN')
+parser.add_argument('--hidden_drop', default=0.3, type=float, help='GCN: Dropout after GCN')
 parser.add_argument('--hidden_drop2', default=0.3, type=float, help='ConvE: hidden dropout')
 parser.add_argument('--feat_drop', default=0.3, type=float, help='ConvE: feature dropout')
 parser.add_argument('--k_w', default=10, type=int, help='ConvE: k_w')
@@ -173,8 +173,8 @@ def train_and_evaluate(model, data_iters, graph, optimizer, scheduler, params, m
                 patience_counter += 1
 
             # early stopping and logging best measure
-            if (patience_counter >= params.patience_num and epoch > params.min_epoch) or epoch == params.max_epoch:
-                logging.info("Early stopping with best val measure: {:05.2f}".format(best_measure))
+            if params.patience_num > 0 and patience_counter >= params.patience_num and epoch > params.min_epoch:
+                logging.info("Early stopping with best val measure: {:05.3f}".format(best_measure))
                 break
 
 
@@ -220,7 +220,6 @@ if __name__ == '__main__':
     # prepare optimizer and scheduler
     optimizer = torch.optim.Adam(
         model.parameters(), lr=params.learning_rate, weight_decay=params.weight_decay)
-    # optimizer = torch.optim.SGD(model.parameters(), lr=params.learning_rate, momentum=0.9)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=50, gamma=0.95, last_epoch=-1)
 
     # train and evaluate the model

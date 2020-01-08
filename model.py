@@ -13,7 +13,7 @@ class MGCN(torch.nn.Module):
         self.entity_embedding = nn.Embedding(num_entities, params.embed_dim)
         self.relation_embedding = nn.Embedding(2 * num_relations, params.embed_dim)
 
-        self.conv1 = MGCNConv(params.embed_dim, params.embed_dim, num_relations * 2)
+        self.conv1 = MGCNConv(params.embed_dim, params.embed_dim, num_relations * 2, num_bases=8)
         self.conv2 = ConvE(params, num_entities)
 
     def forward(self, src, rel, data):
@@ -41,14 +41,15 @@ class MGCNConv(MessagePassing):
                  root_weight=True, bias=True, **kwargs):
         super(MGCNConv, self).__init__(aggr='add', **kwargs)
 
+        assert in_channels % num_bases == 0 and out_channels % num_bases == 0
+
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.num_relations = num_relations
         self.num_bases = num_bases
 
-        self.basis = nn.Parameter(torch.Tensor(num_bases, in_channels, out_channels))
-        self.att = nn.Parameter(torch.Tensor(num_relations, num_bases))
-        self.weight = nn.Parameter(torch.Tensor(num_relations, out_channels))
+        self.relations = nn.Parameter(torch.Tensor(num_relations, in_channels))
+        self.weight = nn.Parameter(torch.Tensor(in_channels, out_channels))
 
         if root_weight:
             self.root = nn.Parameter(torch.Tensor(in_channels, out_channels))
@@ -63,10 +64,9 @@ class MGCNConv(MessagePassing):
         self.reset_parameters()
 
     def reset_parameters(self):
-        nn.init.xavier_uniform_(self.basis, nn.init.calculate_gain('relu'))
-        nn.init.xavier_uniform_(self.att, nn.init.calculate_gain('relu'))
-        nn.init.xavier_uniform_(self.root, nn.init.calculate_gain('relu'))
+        nn.init.xavier_uniform_(self.relations, nn.init.calculate_gain('relu'))
         nn.init.xavier_uniform_(self.weight, nn.init.calculate_gain('relu'))
+        nn.init.xavier_uniform_(self.root, nn.init.calculate_gain('relu'))
         nn.init.zeros_(self.bias)
 
     def forward(self, x, edge_index, edge_type, edge_norm=None, size=None):
@@ -76,11 +76,20 @@ class MGCNConv(MessagePassing):
 
     def message(self, x_i, x_j, edge_index_i, edge_index_j, edge_index, edge_type, edge_norm):
 
-        w = torch.matmul(self.att, self.basis.view(self.num_bases, -1))
-        w = w.view(self.num_relations, self.in_channels, self.out_channels)
-        w = torch.index_select(w, 0, edge_type)
-        out = torch.bmm(x_j.unsqueeze(1), w).squeeze(-2)
+        # weight = torch.index_select(self.weight, 0, edge_type).view(-1, self.submat_in, self.submat_out)
+        # out = torch.bmm(x_j.view(-1, 1, self.submat_in), weight).view(-1, self.out_channels)
 
+        out = torch.matmul(x_j * self.relations[edge_type], self.weight)
+
+        # outs = []
+        # w = torch.matmul(self.att, self.basis.view(self.num_bases, -1))
+        # w = w.view(self.num_relations, self.in_channels, self.out_channels)
+        # for rel in range(self.num_relations):
+        #     x_j_rel = x_j[(edge_type == rel)]
+        #     out = torch.matmul(x_j_rel, w[rel])
+        #     outs.append(out)
+
+        # return torch.cat(outs, dim=0) * edge_norm.view(-1, 1)
         return out * edge_norm.view(-1, 1)
 
     def update(self, aggr_out, x):

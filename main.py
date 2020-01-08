@@ -23,9 +23,9 @@ parser.add_argument('--multi_gpu', default=False, action='store_true', help="Whe
 parser.add_argument('--batch_size', default=128, type=int, help="Batch size")
 parser.add_argument('--max_epoch', default=500, type=int, help='Number of maximum epochs')
 parser.add_argument('--min_epoch', default=50, type=int, help='Number of minimum epochs')
-parser.add_argument('--eval_every', default=1, type=int, help='Number of epochs to test the model')
+parser.add_argument('--eval_every', default=2, type=int, help='Number of epochs to test the model')
 parser.add_argument('--patience', default=0.001, type=float, help='Increasement between two epochs')
-parser.add_argument('--patience_num', default=30, type=int, help='Early stopping creteria')
+parser.add_argument('--patience_num', default=-1, type=int, help='Early stopping creteria')
 parser.add_argument('--learning_rate', default=0.001, type=float, help='Learning rate')
 parser.add_argument('--weight_decay', default=0, type=float, help='Weight decay for the optimizer')
 parser.add_argument('--lbl_smooth', default=0.1, type=float, help="Label smoothing")
@@ -155,7 +155,7 @@ def train_and_evaluate(model, data_iters, graph, optimizer, scheduler, params, m
         train(model, data_iters['train'], graph, optimizer, params)
         scheduler.step()
 
-        if (epoch + 1) % params.eval_every == 0:
+        if epoch % params.eval_every == 0:
             val_metrics = evaluate(model, data_iters, graph, 'valid', mark='Val')
 
             val_measure = val_metrics['mrr']

@@ -17,7 +17,7 @@ from data_loader import DataLoader
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--dataset', default='WN18RR', help="Directory containing the dataset")
-parser.add_argument('--seed', default=2020, help="random seed for initialization")
+parser.add_argument('--seed', default=19960326, help="random seed for initialization")
 parser.add_argument('--restore_dir', default=None, help='Optional, directory containing weights to reload before training')
 parser.add_argument('--multi_gpu', default=False, action='store_true', help="Whether to use multiple GPUs if available")
 parser.add_argument('--batch_size', default=128, type=int, help="Batch size")

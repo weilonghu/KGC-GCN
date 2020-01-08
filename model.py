@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn.conv import MessagePassing
+from torch_geometric.utils import softmax
 
 
 class MGCN(torch.nn.Module):
@@ -50,6 +51,8 @@ class MGCNConv(MessagePassing):
 
         self.relations = nn.Parameter(torch.Tensor(num_relations, in_channels))
         self.weight = nn.Parameter(torch.Tensor(in_channels, out_channels))
+        self.att_weight = nn.Parameter(torch.Tensor(in_channels, out_channels))
+        self.att = nn.Parameter(torch.Tensor(1, 2 * in_channels))
 
         if root_weight:
             self.root = nn.Parameter(torch.Tensor(in_channels, out_channels))
@@ -66,6 +69,8 @@ class MGCNConv(MessagePassing):
     def reset_parameters(self):
         nn.init.xavier_uniform_(self.relations, nn.init.calculate_gain('relu'))
         nn.init.xavier_uniform_(self.weight, nn.init.calculate_gain('relu'))
+        nn.init.xavier_uniform_(self.att_weight, nn.init.calculate_gain('relu'))
+        nn.init.xavier_uniform_(self.att, nn.init.calculate_gain('relu'))
         nn.init.xavier_uniform_(self.root, nn.init.calculate_gain('relu'))
         nn.init.zeros_(self.bias)
 
@@ -74,23 +79,17 @@ class MGCNConv(MessagePassing):
         return self.propagate(edge_index, size=size, x=x, edge_type=edge_type,
                               edge_norm=edge_norm)
 
-    def message(self, x_i, x_j, edge_index_i, edge_index_j, edge_index, edge_type, edge_norm):
+    def message(self, x_i, x_j, edge_index_i, edge_index_j, size_i, edge_index, edge_type, edge_norm):
 
-        # weight = torch.index_select(self.weight, 0, edge_type).view(-1, self.submat_in, self.submat_out)
-        # out = torch.bmm(x_j.view(-1, 1, self.submat_in), weight).view(-1, self.out_channels)
+        alpha = (torch.cat([x_i, x_j], dim=1) * self.att).sum(dim=-1)
+        alpha = F.leaky_relu(alpha, 0.2)
+        alpha = softmax(alpha, edge_index_i, size_i)
+        alpha = F.dropout(alpha, p=0, training=self.training)
 
-        out = torch.matmul(x_j * self.relations[edge_type], self.weight)
+        out_a = torch.matmul(x_j * self.relations[edge_type], self.weight)
+        out_b = torch.matmul(x_j, self.att_weight)
 
-        # outs = []
-        # w = torch.matmul(self.att, self.basis.view(self.num_bases, -1))
-        # w = w.view(self.num_relations, self.in_channels, self.out_channels)
-        # for rel in range(self.num_relations):
-        #     x_j_rel = x_j[(edge_type == rel)]
-        #     out = torch.matmul(x_j_rel, w[rel])
-        #     outs.append(out)
-
-        # return torch.cat(outs, dim=0) * edge_norm.view(-1, 1)
-        return out * edge_norm.view(-1, 1)
+        return (out_a * edge_norm.view(-1, 1) + out_b * alpha.view(-1, 1)) / 2
 
     def update(self, aggr_out, x):
         if self.root is not None:

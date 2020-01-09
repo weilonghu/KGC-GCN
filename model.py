@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn.conv import MessagePassing
-from torch_geometric.utils import softmax
 
 
 class MGCN(torch.nn.Module):
@@ -14,7 +13,7 @@ class MGCN(torch.nn.Module):
         self.entity_embedding = nn.Embedding(num_entities, params.embed_dim)
         self.relation_embedding = nn.Embedding(2 * num_relations, params.embed_dim)
 
-        self.conv1 = MGCNConv(params.embed_dim, params.embed_dim, num_relations * 2, num_bases=8)
+        self.conv1 = MGCNConv(params.embed_dim, params.embed_dim, num_relations * 2, num_bases=16)
         self.conv2 = ConvE(params, num_entities)
 
     def forward(self, src, rel, data):
@@ -42,17 +41,14 @@ class MGCNConv(MessagePassing):
                  root_weight=True, bias=True, **kwargs):
         super(MGCNConv, self).__init__(aggr='add', **kwargs)
 
-        assert in_channels % num_bases == 0 and out_channels % num_bases == 0
-
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.num_relations = num_relations
         self.num_bases = num_bases
 
-        self.relations = nn.Parameter(torch.Tensor(num_relations, in_channels))
-        self.weight = nn.Parameter(torch.Tensor(in_channels, out_channels))
-        self.att_weight = nn.Parameter(torch.Tensor(in_channels, out_channels))
-        self.att = nn.Parameter(torch.Tensor(1, 2 * in_channels))
+        self.basis = nn.Parameter(torch.Tensor(num_bases, in_channels, out_channels))
+        self.att = nn.Parameter(torch.Tensor(num_relations, num_bases))
+        self.weight = nn.Parameter(torch.Tensor(num_relations, out_channels))
 
         if root_weight:
             self.root = nn.Parameter(torch.Tensor(in_channels, out_channels))
@@ -67,11 +63,10 @@ class MGCNConv(MessagePassing):
         self.reset_parameters()
 
     def reset_parameters(self):
-        nn.init.xavier_uniform_(self.relations, nn.init.calculate_gain('relu'))
-        nn.init.xavier_uniform_(self.weight, nn.init.calculate_gain('relu'))
-        nn.init.xavier_uniform_(self.att_weight, nn.init.calculate_gain('relu'))
+        nn.init.xavier_uniform_(self.basis, nn.init.calculate_gain('relu'))
         nn.init.xavier_uniform_(self.att, nn.init.calculate_gain('relu'))
         nn.init.xavier_uniform_(self.root, nn.init.calculate_gain('relu'))
+        nn.init.xavier_uniform_(self.weight, nn.init.calculate_gain('relu'))
         nn.init.zeros_(self.bias)
 
     def forward(self, x, edge_index, edge_type, edge_norm=None, size=None):
@@ -79,17 +74,24 @@ class MGCNConv(MessagePassing):
         return self.propagate(edge_index, size=size, x=x, edge_type=edge_type,
                               edge_norm=edge_norm)
 
-    def message(self, x_i, x_j, edge_index_i, edge_index_j, size_i, edge_index, edge_type, edge_norm):
+    def message(self, x_i, x_j, edge_index_i, edge_index_j, edge_index, edge_type, edge_norm):
 
-        alpha = (torch.cat([x_i, x_j], dim=1) * self.att).sum(dim=-1)
-        alpha = F.leaky_relu(alpha, 0.2)
-        alpha = softmax(alpha, edge_index_i, size_i)
-        alpha = F.dropout(alpha, p=0, training=self.training)
+        w = torch.matmul(self.att, self.basis.view(self.num_bases, -1))
+        w = w.view(self.num_relations, self.in_channels, self.out_channels)
 
-        out_a = torch.matmul(x_j * self.relations[edge_type], self.weight)
-        out_b = torch.matmul(x_j, self.att_weight)
+        outs = []
+        indices = []
+        for i in range(self.num_relations):
+            indice = torch.nonzero(edge_type == i).view(-1)
+            out = torch.matmul(x_j[indice], w[i])
+            outs.append(out)
+            indices.append(indice)
 
-        return (out_a * edge_norm.view(-1, 1) + out_b * alpha.view(-1, 1)) / 2
+        outs = torch.cat(outs, dim=0)
+        indices = torch.ones_like(x_j, dtype=torch.long) * torch.cat(indices, dim=0).view(-1, 1)
+        repre = torch.zeros_like(x_j).scatter_(dim=0, index=indices, src=outs)
+
+        return repre * edge_norm.view(-1, 1)
 
     def update(self, aggr_out, x):
         if self.root is not None:

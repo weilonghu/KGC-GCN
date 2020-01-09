@@ -21,7 +21,7 @@ parser.add_argument('--seed', default=19960326, help="random seed for initializa
 parser.add_argument('--restore_dir', default=None, help='Optional, directory containing weights to reload before training')
 parser.add_argument('--multi_gpu', default=False, action='store_true', help="Whether to use multiple GPUs if available")
 parser.add_argument('--batch_size', default=128, type=int, help="Batch size")
-parser.add_argument('--max_epoch', default=500, type=int, help='Number of maximum epochs')
+parser.add_argument('--max_epoch', default=400, type=int, help='Number of maximum epochs')
 parser.add_argument('--min_epoch', default=50, type=int, help='Number of minimum epochs')
 parser.add_argument('--eval_every', default=2, type=int, help='Number of epochs to test the model')
 parser.add_argument('--patience', default=0.001, type=float, help='Increasement between two epochs')

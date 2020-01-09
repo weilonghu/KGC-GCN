@@ -93,6 +93,7 @@ class DataLoader(object):
                 sr2o_train = {k: list(v) for k, v in sr2o.items()}
         sr2o_all = {k: list(v) for k, v in sr2o.items()}
         data = dict(data)
+        self.num_edge = len(data['train'])
 
         self.triplets = defaultdict(list)
 
@@ -144,14 +145,14 @@ class DataLoader(object):
             rel = np.concatenate((rel, rel + self.num_relation))
 
         edge_index = np.stack((src, dst))
-        edge_attr = rel
+        edge_ids = np.arange(edge_index.shape[1])
+        edge_attr = np.stack((rel, edge_ids))
 
         data = Data(edge_index=torch.from_numpy(edge_index),
                     edge_attr=torch.from_numpy(edge_attr))
         data.entity = torch.from_numpy(graph_nodes)
         data.num_nodes = len(graph_nodes)
-        data.edge_norm = self._edge_normal(
-            edge_attr, edge_index, len(graph_nodes))
+        data.edge_norm = self._edge_normal(rel, edge_index, len(graph_nodes))
 
         return data
 

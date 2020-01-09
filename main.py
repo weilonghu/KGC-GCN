@@ -26,15 +26,15 @@ parser.add_argument('--min_epoch', default=50, type=int, help='Number of minimum
 parser.add_argument('--eval_every', default=2, type=int, help='Number of epochs to test the model')
 parser.add_argument('--patience', default=0.001, type=float, help='Increasement between two epochs')
 parser.add_argument('--patience_num', default=-1, type=int, help='Early stopping creteria')
-parser.add_argument('--learning_rate', default=0.001, type=float, help='Learning rate')
+parser.add_argument('--learning_rate', default=0.003, type=float, help='Learning rate')
 parser.add_argument('--weight_decay', default=0, type=float, help='Weight decay for the optimizer')
 parser.add_argument('--lbl_smooth', default=0.1, type=float, help="Label smoothing")
 parser.add_argument('--num_workers', default=0, type=int, help='Number of processes to construct batches')
 parser.add_argument('--bias', action='store_true', help='Whether to use bias in the model')
 parser.add_argument('--embed_dim', default=200, type=int, help='Dimension size for entities and relations')
-parser.add_argument('--hidden_drop', default=0.3, type=float, help='GCN: Dropout after GCN')
-parser.add_argument('--hidden_drop2', default=0.3, type=float, help='ConvE: hidden dropout')
-parser.add_argument('--feat_drop', default=0.3, type=float, help='ConvE: feature dropout')
+parser.add_argument('--gcn_drop', default=0.2, type=float, help='GCN: Dropout after GCN')
+parser.add_argument('--hidden_drop', default=0.3, type=float, help='ConvE: hidden dropout')
+parser.add_argument('--feat_drop', default=0.2, type=float, help='ConvE: feature dropout')
 parser.add_argument('--k_w', default=10, type=int, help='ConvE: k_w')
 parser.add_argument('--k_h', default=20, type=int, help='ConvE: k_h')
 parser.add_argument('--num_filter', default=200, type=int, help='ConvE: number of filters in convolution')
@@ -211,7 +211,7 @@ if __name__ == '__main__':
     data_iters = data_loader.get_data_loaders(params.batch_size, params.num_workers, params)
 
     # prepare model
-    model = MGCN(data_loader.num_entity, data_loader.num_relation, params)
+    model = MGCN(data_loader.num_entity, data_loader.num_relation, data_loader.num_edge, params)
     model.to(params.device)
 
     if params.n_gpu > 1 and args.multi_gpu:

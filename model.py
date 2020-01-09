@@ -6,23 +6,26 @@ from torch_geometric.nn.conv import MessagePassing
 
 class MGCN(torch.nn.Module):
 
-    def __init__(self, num_entities, num_relations, params):
+    def __init__(self, num_entities, num_relations, num_edges, params):
         super(MGCN, self).__init__()
         self.params = params
 
         self.entity_embedding = nn.Embedding(num_entities, params.embed_dim)
         self.relation_embedding = nn.Embedding(2 * num_relations, params.embed_dim)
+        self.edge_embeddings = nn.Embedding(2 * num_edges, params.embed_dim)
 
         self.conv1 = MGCNConv(params.embed_dim, params.embed_dim, num_relations * 2, num_bases=16)
         self.conv2 = ConvE(params, num_entities)
 
     def forward(self, src, rel, data):
-        entity, edge_index, edge_type, edge_norm = data.entity, data.edge_index, data.edge_attr, data.edge_norm
+        entity, edge_index, edge_norm = data.entity, data.edge_index, data.edge_norm
+        edge_type, edge_ids = data.edge_attr
 
         # gcn
         entity_embeddings = self.entity_embedding(entity)
-        entity_embeddings = self.conv1(entity_embeddings, edge_index, edge_type, edge_norm)
-        entity_embeddings = F.dropout(entity_embeddings, p=self.params.hidden_drop, training=self.training)
+        edge_embeddings = self.edge_embeddings(edge_ids)
+        entity_embeddings = self.conv1(entity_embeddings, edge_index, edge_type, edge_norm, edge_embeddings)
+        entity_embeddings = F.dropout(entity_embeddings, p=self.params.gcn_drop, training=self.training)
 
         # ConvE
         src_emb, rel_emb, all_ent = entity_embeddings[src], self.relation_embedding(rel), entity_embeddings
@@ -69,13 +72,14 @@ class MGCNConv(MessagePassing):
         nn.init.xavier_uniform_(self.weight, nn.init.calculate_gain('relu'))
         nn.init.zeros_(self.bias)
 
-    def forward(self, x, edge_index, edge_type, edge_norm=None, size=None):
+    def forward(self, x, edge_index, edge_type, edge_norm=None, edge_embs=None, size=None):
         """"""
         return self.propagate(edge_index, size=size, x=x, edge_type=edge_type,
-                              edge_norm=edge_norm)
+                              edge_norm=edge_norm, edge_embs=edge_embs)
 
-    def message(self, x_i, x_j, edge_index_i, edge_index_j, edge_index, edge_type, edge_norm):
+    def message(self, x_i, x_j, edge_index, edge_type, edge_norm, edge_embs):
 
+        # RGCN
         w = torch.matmul(self.att, self.basis.view(self.num_bases, -1))
         w = w.view(self.num_relations, self.in_channels, self.out_channels)
 
@@ -83,7 +87,7 @@ class MGCNConv(MessagePassing):
         indices = []
         for i in range(self.num_relations):
             indice = torch.nonzero(edge_type == i).view(-1)
-            out = torch.matmul(x_j[indice], w[i])
+            out = torch.matmul(x_j[indice] + edge_embs[indice], w[i])
             outs.append(out)
             indices.append(indice)
 
@@ -122,7 +126,6 @@ class ConvE(nn.Module):
         self.bn2 = nn.BatchNorm1d(params.embed_dim)
 
         self.hidden_drop = torch.nn.Dropout(params.hidden_drop)
-        self.hidden_drop2 = torch.nn.Dropout(params.hidden_drop2)
         self.feature_drop = torch.nn.Dropout(params.feat_drop)
         self.conv_e = torch.nn.Conv2d(
             in_channels=1,
@@ -154,7 +157,7 @@ class ConvE(nn.Module):
         x = self.feature_drop(x)
         x = x.view(-1, self.flat_sz)
         x = self.fc(x)
-        x = self.hidden_drop2(x)
+        x = self.hidden_drop(x)
         x = self.bn2(x)
         x = F.relu(x)
 

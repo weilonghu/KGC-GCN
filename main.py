@@ -26,7 +26,7 @@ parser.add_argument('--min_epoch', default=50, type=int, help='Number of minimum
 parser.add_argument('--eval_every', default=2, type=int, help='Number of epochs to test the model')
 parser.add_argument('--patience', default=0.001, type=float, help='Increasement between two epochs')
 parser.add_argument('--patience_num', default=-1, type=int, help='Early stopping creteria')
-parser.add_argument('--learning_rate', default=0.003, type=float, help='Learning rate')
+parser.add_argument('--learning_rate', default=0.002, type=float, help='Learning rate')
 parser.add_argument('--weight_decay', default=0, type=float, help='Weight decay for the optimizer')
 parser.add_argument('--lbl_smooth', default=0.1, type=float, help="Label smoothing")
 parser.add_argument('--num_workers', default=0, type=int, help='Number of processes to construct batches')
@@ -220,7 +220,7 @@ if __name__ == '__main__':
     # prepare optimizer and scheduler
     optimizer = torch.optim.Adam(
         model.parameters(), lr=params.learning_rate, weight_decay=params.weight_decay)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=50, gamma=0.95, last_epoch=-1)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.995, last_epoch=-1)
 
     # train and evaluate the model
     if params.do_train:

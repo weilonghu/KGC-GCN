@@ -49,9 +49,8 @@ class MGCNConv(MessagePassing):
         self.num_relations = num_relations
         self.num_bases = num_bases
 
-        self.basis = nn.Parameter(torch.Tensor(num_bases, in_channels, out_channels))
-        self.att = nn.Parameter(torch.Tensor(num_relations, num_bases))
-        self.weight = nn.Parameter(torch.Tensor(num_relations, out_channels))
+        self.weight = nn.Parameter(torch.Tensor(in_channels, out_channels))
+        self.relation_feat = nn.Parameter(torch.Tensor(num_relations, in_channels))
 
         if root_weight:
             self.root = nn.Parameter(torch.Tensor(in_channels, out_channels))
@@ -66,8 +65,7 @@ class MGCNConv(MessagePassing):
         self.reset_parameters()
 
     def reset_parameters(self):
-        nn.init.xavier_uniform_(self.basis, nn.init.calculate_gain('relu'))
-        nn.init.xavier_uniform_(self.att, nn.init.calculate_gain('relu'))
+        nn.init.xavier_uniform_(self.relation_feat, nn.init.calculate_gain('relu'))
         nn.init.xavier_uniform_(self.root, nn.init.calculate_gain('relu'))
         nn.init.xavier_uniform_(self.weight, nn.init.calculate_gain('relu'))
         nn.init.zeros_(self.bias)
@@ -79,21 +77,7 @@ class MGCNConv(MessagePassing):
 
     def message(self, x_i, x_j, edge_index, edge_type, edge_norm, edge_embs):
 
-        # RGCN
-        w = torch.matmul(self.att, self.basis.view(self.num_bases, -1))
-        w = w.view(self.num_relations, self.in_channels, self.out_channels)
-
-        outs = []
-        indices = []
-        for i in range(self.num_relations):
-            indice = torch.nonzero(edge_type == i).view(-1)
-            out = torch.matmul(x_j[indice] + edge_embs[indice], w[i])
-            outs.append(out)
-            indices.append(indice)
-
-        outs = torch.cat(outs, dim=0)
-        indices = torch.ones_like(x_j, dtype=torch.long) * torch.cat(indices, dim=0).view(-1, 1)
-        repre = torch.zeros_like(x_j).scatter_(dim=0, index=indices, src=outs)
+        repre = torch.matmul(x_j * self.relation_feat[edge_type] + edge_embs, self.weight)
 
         return repre * edge_norm.view(-1, 1)
 

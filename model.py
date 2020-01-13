@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn.conv import MessagePassing
+from torch_geometric.utils import softmax
 
 
 class MGCN(torch.nn.Module):
@@ -14,7 +15,7 @@ class MGCN(torch.nn.Module):
         self.relation_embedding = nn.Embedding(2 * num_relations, params.embed_dim)
         self.edge_embeddings = nn.Embedding(2 * num_edges, params.embed_dim)
 
-        self.conv1 = MGCNConv(params.embed_dim, params.embed_dim, num_relations * 2, num_bases=16)
+        self.conv1 = MGCNConv(params.embed_dim, params.embed_dim, num_relations * 2)
         self.conv2 = ConvE(params, num_entities)
 
     def forward(self, src, rel, data):
@@ -40,22 +41,18 @@ class MGCN(torch.nn.Module):
 
 class MGCNConv(MessagePassing):
 
-    def __init__(self, in_channels, out_channels, num_relations, num_bases,
-                 root_weight=True, bias=True, **kwargs):
+    def __init__(self, in_channels, out_channels, num_relations, bias=True, **kwargs):
         super(MGCNConv, self).__init__(aggr='add', **kwargs)
 
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.num_relations = num_relations
-        self.num_bases = num_bases
 
-        self.weight = nn.Parameter(torch.Tensor(in_channels, out_channels))
-        self.relation_feat = nn.Parameter(torch.Tensor(num_relations, in_channels))
+        self.rels_feat = nn.Parameter(torch.Tensor(num_relations, in_channels))
+        self.bn = nn.BatchNorm1d(out_channels)
 
-        if root_weight:
-            self.root = nn.Parameter(torch.Tensor(in_channels, out_channels))
-        else:
-            self.register_parameter('root', None)
+        self.root_weight = nn.Parameter(torch.Tensor(in_channels, out_channels))
+        self.neighbor_weight = nn.Parameter(torch.Tensor(3 * in_channels, out_channels))
 
         if bias:
             self.bias = nn.Parameter(torch.Tensor(out_channels))
@@ -65,32 +62,30 @@ class MGCNConv(MessagePassing):
         self.reset_parameters()
 
     def reset_parameters(self):
-        nn.init.xavier_uniform_(self.relation_feat, nn.init.calculate_gain('relu'))
-        nn.init.xavier_uniform_(self.root, nn.init.calculate_gain('relu'))
-        nn.init.xavier_uniform_(self.weight, nn.init.calculate_gain('relu'))
-        nn.init.zeros_(self.bias)
+        nn.init.xavier_uniform_(self.rels_feat, nn.init.calculate_gain('relu'))
+        nn.init.xavier_uniform_(self.neighbor_weight, nn.init.calculate_gain('relu'))
+        nn.init.xavier_uniform_(self.root_weight, nn.init.calculate_gain('relu'))
+        if self.bias is not None:
+            nn.init.zeros_(self.bias)
 
     def forward(self, x, edge_index, edge_type, edge_norm=None, edge_embs=None, size=None):
         """"""
         return self.propagate(edge_index, size=size, x=x, edge_type=edge_type,
                               edge_norm=edge_norm, edge_embs=edge_embs)
 
-    def message(self, x_i, x_j, edge_index, edge_type, edge_norm, edge_embs):
+    def message(self, x_i, x_j, edge_index_i, edge_index_j, edge_type, edge_norm, edge_embs):
 
-        repre = torch.matmul(x_j * self.relation_feat[edge_type] + edge_embs, self.weight)
+        repre = torch.matmul(torch.cat([x_j, edge_embs, self.rels_feat[edge_type]], dim=1), self.neighbor_weight)
 
         return repre * edge_norm.view(-1, 1)
 
     def update(self, aggr_out, x):
-        if self.root is not None:
-            if x is None:
-                out = aggr_out + self.root
-            else:
-                out = aggr_out + torch.matmul(x, self.root)
+
+        out = aggr_out + torch.matmul(x, self.root_weight)
 
         if self.bias is not None:
             out = out + self.bias
-        return out
+        return self.bn(out)
 
     def __repr__(self):
         return '{}({}, {}, num_relations={})'.format(

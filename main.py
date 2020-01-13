@@ -21,7 +21,7 @@ parser.add_argument('--seed', default=19960326, help="random seed for initializa
 parser.add_argument('--restore_dir', default=None, help='Optional, directory containing weights to reload before training')
 parser.add_argument('--multi_gpu', default=False, action='store_true', help="Whether to use multiple GPUs if available")
 parser.add_argument('--batch_size', default=128, type=int, help="Batch size")
-parser.add_argument('--max_epoch', default=400, type=int, help='Number of maximum epochs')
+parser.add_argument('--max_epoch', default=500, type=int, help='Number of maximum epochs')
 parser.add_argument('--min_epoch', default=50, type=int, help='Number of minimum epochs')
 parser.add_argument('--eval_every', default=2, type=int, help='Number of epochs to test the model')
 parser.add_argument('--patience', default=0.001, type=float, help='Increasement between two epochs')
@@ -37,8 +37,8 @@ parser.add_argument('--hidden_drop', default=0.3, type=float, help='ConvE: hidde
 parser.add_argument('--feat_drop', default=0.2, type=float, help='ConvE: feature dropout')
 parser.add_argument('--k_w', default=10, type=int, help='ConvE: k_w')
 parser.add_argument('--k_h', default=20, type=int, help='ConvE: k_h')
-parser.add_argument('--num_filter', default=200, type=int, help='ConvE: number of filters in convolution')
-parser.add_argument('--kernel_size', default=7, type=int, help='ConvE: kernel size to use')
+parser.add_argument('--num_filter', default=256, type=int, help='ConvE: number of filters in convolution')
+parser.add_argument('--kernel_size', default=3, type=int, help='ConvE: kernel size to use')
 parser.add_argument('--clip_grad', default=1.0, type=float, help='Gradient clipping')
 parser.add_argument('--do_train', action='store_false', help='If train the model')
 parser.add_argument('--do_test', action='store_false', help='If test the model')
@@ -220,7 +220,7 @@ if __name__ == '__main__':
     # prepare optimizer and scheduler
     optimizer = torch.optim.Adam(
         model.parameters(), lr=params.learning_rate, weight_decay=params.weight_decay)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.995, last_epoch=-1)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.995, last_epoch=-1)
 
     # train and evaluate the model
     if params.do_train:

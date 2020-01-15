@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn.conv import MessagePassing
-from torch_geometric.utils import softmax
 
 
 class MGCN(torch.nn.Module):
@@ -22,14 +21,17 @@ class MGCN(torch.nn.Module):
         entity, edge_index, edge_norm = data.entity, data.edge_index, data.edge_norm
         edge_type, edge_ids = data.edge_attr
 
-        # gcn
-        entity_embeddings = self.entity_embedding(entity)
-        edge_embeddings = self.edge_embeddings(edge_ids)
-        entity_embeddings = self.conv1(entity_embeddings, edge_index, edge_type, edge_norm, edge_embeddings)
-        entity_embeddings = F.dropout(entity_embeddings, p=self.params.gcn_drop, training=self.training)
+        # Loop-up entity, relation and edge embeddings for gcn encoder
+        entity_embs = self.entity_embedding(entity)
+        edge_embs = self.edge_embeddings(edge_ids)
+        rels_embs = self.relation_embedding(edge_type)
 
-        # ConvE
-        src_emb, rel_emb, all_ent = entity_embeddings[src], self.relation_embedding(rel), entity_embeddings
+        # GCN encoder
+        all_ent = self.conv1(entity_embs, edge_index, edge_type, edge_norm, edge_embs, rels_embs)
+        all_ent = F.dropout(all_ent, p=self.params.gcn_drop, training=self.training)
+
+        # ConvE decoder
+        src_emb, rel_emb = all_ent[src], self.relation_embedding(rel)
         score = self.conv2(src_emb, rel_emb, all_ent)
 
         return score
@@ -41,51 +43,45 @@ class MGCN(torch.nn.Module):
 
 class MGCNConv(MessagePassing):
 
-    def __init__(self, in_channels, out_channels, num_relations, bias=True, **kwargs):
+    def __init__(self, in_channels, out_channels, num_relations, bias=True, root_weight=1, **kwargs):
         super(MGCNConv, self).__init__(aggr='add', **kwargs)
 
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.num_relations = num_relations
+        self.root_weight = root_weight
 
-        self.rels_feat = nn.Parameter(torch.Tensor(num_relations, in_channels))
-        self.bn = nn.BatchNorm1d(out_channels)
+        self.ent_bn = nn.BatchNorm1d(out_channels)
 
-        self.root_weight = nn.Parameter(torch.Tensor(in_channels, out_channels))
-        self.neighbor_weight = nn.Parameter(torch.Tensor(3 * in_channels, out_channels))
+        self.mlp = nn.Sequential(
+            nn.Linear(3 * in_channels, out_channels, bias=True),
+            nn.ReLU()
+        )
 
-        if bias:
-            self.bias = nn.Parameter(torch.Tensor(out_channels))
-        else:
-            self.register_parameter('bias', None)
+        self.loop_mlp = nn.Sequential(
+            nn.Linear(in_channels, out_channels),
+            nn.ReLU()
+        )
 
-        self.reset_parameters()
+    def forward(self, x, edge_index, edge_type, edge_norm, edge_embs, rels_embs, size=None):
 
-    def reset_parameters(self):
-        nn.init.xavier_uniform_(self.rels_feat, nn.init.calculate_gain('relu'))
-        nn.init.xavier_uniform_(self.neighbor_weight, nn.init.calculate_gain('relu'))
-        nn.init.xavier_uniform_(self.root_weight, nn.init.calculate_gain('relu'))
-        if self.bias is not None:
-            nn.init.zeros_(self.bias)
-
-    def forward(self, x, edge_index, edge_type, edge_norm=None, edge_embs=None, size=None):
-        """"""
         return self.propagate(edge_index, size=size, x=x, edge_type=edge_type,
-                              edge_norm=edge_norm, edge_embs=edge_embs)
+                              edge_norm=edge_norm, edge_embs=edge_embs, rels_embs=rels_embs)
 
-    def message(self, x_i, x_j, edge_index_i, edge_index_j, edge_type, edge_norm, edge_embs):
+    def message(self, x_i, x_j, edge_index, edge_type, edge_norm, edge_embs, rels_embs):
 
-        repre = torch.matmul(torch.cat([x_j, edge_embs, self.rels_feat[edge_type]], dim=1), self.neighbor_weight)
+        cat_feat = torch.cat([x_j, edge_embs, rels_embs], dim=1)
+        repre = self.mlp(cat_feat)
 
         return repre * edge_norm.view(-1, 1)
 
     def update(self, aggr_out, x):
 
-        out = aggr_out + torch.matmul(x, self.root_weight)
+        all_ent = aggr_out + self.loop_mlp(x)
 
-        if self.bias is not None:
-            out = out + self.bias
-        return self.bn(out)
+        all_ent = self.ent_bn(all_ent)
+
+        return all_ent
 
     def __repr__(self):
         return '{}({}, {}, num_relations={})'.format(

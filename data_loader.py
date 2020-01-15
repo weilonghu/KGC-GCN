@@ -180,7 +180,7 @@ class DataLoader(object):
     def get_data_loaders(self, batch_size, num_workers, params):
 
         marks = ['train', 'valid_head', 'valid_tail', 'test_head', 'test_tail']
-        drops = [True] + [False] * 4
+        drops = [False] * 5
 
         data_iters = {}
         for mark, drop in zip(marks, drops):

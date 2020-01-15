@@ -38,7 +38,7 @@ parser.add_argument('--feat_drop', default=0.2, type=float, help='ConvE: feature
 parser.add_argument('--k_w', default=10, type=int, help='ConvE: k_w')
 parser.add_argument('--k_h', default=20, type=int, help='ConvE: k_h')
 parser.add_argument('--num_filter', default=256, type=int, help='ConvE: number of filters in convolution')
-parser.add_argument('--kernel_size', default=3, type=int, help='ConvE: kernel size to use')
+parser.add_argument('--kernel_size', default=4, type=int, help='ConvE: kernel size to use')
 parser.add_argument('--clip_grad', default=1.0, type=float, help='Gradient clipping')
 parser.add_argument('--do_train', action='store_false', help='If train the model')
 parser.add_argument('--do_test', action='store_false', help='If test the model')

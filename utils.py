@@ -4,6 +4,7 @@ import os
 import shutil
 import torch
 import math
+import torch.nn as nn
 
 
 class Params():
@@ -107,6 +108,14 @@ def save_json(params, json_file):
     """Save params dict to a json file"""
     with open(json_file, 'w') as fp:
         json.dump(params, fp, indent=4)
+
+
+def get_param(shape):
+    param = nn.Parameter(torch.Tensor(*shape))
+    # nn.init.xavier_normal_(param.data)
+    nn.init.xavier_uniform_(param.data)
+
+    return param
 
 
 def save_checkpoint(state, is_best, checkpoint_dir):

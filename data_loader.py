@@ -8,6 +8,7 @@ import torch
 import numpy as np
 
 from collections import defaultdict
+from ordered_set import OrderedSet
 from torch.utils import data
 from torch_geometric.data import Data
 from torch_scatter import scatter_add
@@ -58,23 +59,22 @@ class DataLoader(object):
         self.graph = self._load_data()
 
     def _load_data(self):
-        # read entities
-        self.entity2id = {}
-        with open(os.path.join(self.data_dir, 'entity2id.txt'), 'r') as f:
-            for line in f:
-                entity, eid = line.strip().split()
-                self.entity2id[entity] = int(eid)
-        self.num_entity = len(self.entity2id)
 
-        # read relations
-        self.relation2id = {}
-        with open(os.path.join(self.data_dir, 'relation2id.txt'), 'r') as f:
-            for line in f:
-                relation, rid = line.strip().split()
-                self.relation2id[relation] = int(rid)
-        self.num_relation = len(self.relation2id)
+        # read entities and relations
+        ent_set, rel_set = OrderedSet(), OrderedSet()
+        for data_type in ['train', 'valid', 'test']:
+            for line in open(os.path.join(self.data_dir, data_type + '.txt'), 'r'):
+                sub, rel, obj = map(str.lower, line.strip().split())
+                ent_set.add(sub)
+                rel_set.add(rel)
+                ent_set.add(obj)
+        self.entity2id = {ent: idx for idx, ent in enumerate(ent_set)}
+        self.relation2id = {rel: idx for idx, rel in enumerate(rel_set)}
         self.relation2id.update({rel + '_reverse': idx + len(self.relation2id)
                                  for idx, rel in enumerate(self.relation2id.keys())})
+
+        self.num_entity = len(self.entity2id)
+        self.num_relation = len(self.relation2id) // 2
 
         # read triplets
         data = defaultdict(list)

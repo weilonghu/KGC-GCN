@@ -135,18 +135,13 @@ def predict(model, data_iters, graph, data_type, device, mode='tail_batch'):
     return results
 
 
-def train_and_evaluate(model, data_iters, graph, optimizer, scheduler, params, model_dir, restore_dir):
+def train_and_evaluate(model, data_iters, graph, optimizer, scheduler, params, model_dir, saved_best):
     """Train the model and evaluate every epoch"""
 
     # main evaluation criteria
-    best_measure = 0
+    best_measure = saved_best
     # early stopping
     patience_counter = 0
-
-    # reload weights from restore_dir if specified
-    if restore_dir is not None:
-        best_measure = utils.load_checkpoint(os.path.join(restore_dir, 'last.ckpt'), model)
-        logging.info('Restore model from {} with best measure: {}'.format(os.path.join(restore_dir, 'last.ckpt'), best_measure))
 
     logging.info('Starting training for {} epoch(s)'.format(params.max_epoch))
 
@@ -223,8 +218,14 @@ if __name__ == '__main__':
         model.parameters(), lr=params.learning_rate, weight_decay=params.weight_decay)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.995, last_epoch=-1)
 
+    # reload weights from restore_dir if specified
+    best_measure = 0
+    if args.restore_dir is not None:
+        best_measure = utils.load_checkpoint(os.path.join(args.restore_dir, 'last.ckpt'), model)
+        logging.info('Restore model from {} with best measure: {}'.format(os.path.join(args.restore_dir, 'last.ckpt'), best_measure))
+
     # train and evaluate the model
     if params.do_train:
-        train_and_evaluate(model, data_iters, data_loader.graph, optimizer, scheduler, params, model_dir, args.restore_dir)
+        train_and_evaluate(model, data_iters, data_loader.graph, optimizer, scheduler, params, model_dir, best_measure)
     if params.do_test:
         evaluate(model, data_iters, data_loader.graph, 'test', mark='Test')

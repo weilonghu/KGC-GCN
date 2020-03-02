@@ -41,9 +41,9 @@ parser.add_argument('--k_h', default=20, type=int, help='ConvE: k_h')
 parser.add_argument('--num_filter', default=200, type=int, help='ConvE: number of filters in convolution')
 parser.add_argument('--kernel_size', default=7, type=int, help='ConvE: kernel size to use')
 parser.add_argument('--clip_grad', default=1.0, type=float, help='Gradient clipping')
-parser.add_argument('--do_train', action='store_false', help='If train the model')
-parser.add_argument('--do_test', action='store_false', help='If test the model')
-parser.add_argument('--bi_direction', action='store_true', help='If add reverse relation to the graph')
+parser.add_argument('--do_train', action='store_true', help='If train the model')
+parser.add_argument('--do_test', action='store_true', help='If test the model')
+parser.add_argument('--bi_direction', action='store_false', help='If add reverse relation to the graph')
 
 
 def train(model, data_iter, graph, optimizer, params):
@@ -77,7 +77,7 @@ def train(model, data_iter, graph, optimizer, params):
     return loss_avg()
 
 
-def evaluate(model, data_iters, graph, data_type, mark='Val', hits=[1, 3, 10]):
+def evaluate(model, data_iters, graph, params, data_type, mark='Val', hits=[1, 3, 10]):
     tail_results = predict(model, data_iters, graph, data_type, params.device, mode='tail_batch')
     head_results = predict(model, data_iters, graph, data_type, params.device, mode='head_batch')
 
@@ -152,7 +152,7 @@ def train_and_evaluate(model, data_iters, graph, optimizer, scheduler, params, m
         scheduler.step()
 
         if epoch % params.eval_every == 0:
-            val_metrics = evaluate(model, data_iters, graph, 'valid', mark='Val')
+            val_metrics = evaluate(model, data_iters, graph, params, 'valid', mark='Val')
 
             val_measure = val_metrics['mrr']
             improve_measure = val_measure - best_measure
@@ -174,7 +174,7 @@ def train_and_evaluate(model, data_iters, graph, optimizer, scheduler, params, m
                 break
 
 
-if __name__ == '__main__':
+def main():
     args = parser.parse_args()
     # directory containing saved model
     model_dir = os.path.join('experiments', args.dataset)
@@ -225,7 +225,15 @@ if __name__ == '__main__':
         logging.info('Restore model from {} with best measure: {}'.format(os.path.join(args.restore_dir, 'last.ckpt'), best_measure))
 
     # train and evaluate the model
+    if params.do_train and params.do_test:
+        raise ValueError('Can not perform training and testing at one time')
     if params.do_train:
         train_and_evaluate(model, data_iters, data_loader.graph, optimizer, scheduler, params, model_dir, best_measure)
     if params.do_test:
-        evaluate(model, data_iters, data_loader.graph, 'test', mark='Test')
+        if args.restore_dir is None:
+            raise ValueError('Must specify restore dir for testing')
+        evaluate(model, data_iters, data_loader.graph, params, 'test', mark='Test')
+
+
+if __name__ == '__main__':
+    main()
